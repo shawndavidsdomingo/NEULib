@@ -1,0 +1,69 @@
+
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized staff members with management privileges.",
+      "type": "object",
+      "properties": {
+        "adminId": { "type": "string", "description": "Unique staff identifier (Firebase UID)." },
+        "name": { "type": "string", "description": "Full name of the staff member." },
+        "email": { "type": "string", "format": "email" },
+        "isSuperAdmin": { "type": "boolean", "description": "Grants full system access including deletion." }
+      },
+      "required": ["adminId", "name", "email", "isSuperAdmin"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Reference table for NEU colleges.",
+      "type": "object",
+      "properties": {
+        "deptID": { "type": "string", "description": "Unique code (e.g., CICS)." },
+        "departmentName": { "type": "string", "description": "Full name of the college." }
+      },
+      "required": ["deptID", "departmentName"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "The central registry of library users.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "description": "Unique student identifier (YY-XXXXX-ZZZ)." },
+        "firstName": { "type": "string" },
+        "middleName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "deptID": { "type": "string", "description": "Linked to Department.deptID" },
+        "role": { "type": "string", "enum": ["Student", "Staff", "Visitor"] },
+        "isBlocked": { "type": "boolean" },
+        "profilePicture": { "type": "string" }
+      },
+      "required": ["studentId", "firstName", "lastName", "email", "deptID", "role", "isBlocked"]
+    },
+    "LibraryLog": {
+      "title": "LibraryLog",
+      "description": "Transactional record of a library visit.",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "description": "Unique log identifier." },
+        "studentId": { "type": "string", "description": "Linked to Student.studentId" },
+        "deptID": { "type": "string", "description": "Linked to Department.deptID" },
+        "checkInTimestamp": { "type": "string", "format": "date-time" },
+        "checkOutTimestamp": { "type": "string", "format": "date-time" },
+        "purpose": { "type": "string" },
+        "studentName": { "type": "string", "description": "Denormalized for performance." }
+      },
+      "required": ["logId", "studentId", "deptID", "checkInTimestamp", "purpose"]
+    }
+  },
+  "auth": {
+    "providers": ["google.com", "anonymous"]
+  },
+  "firestore": {
+    "/admins/{adminId}": { "schema": "Admin", "description": "Staff registry." },
+    "/departments/{deptID}": { "schema": "Department", "description": "College reference." },
+    "/students/{studentId}": { "schema": "Student", "description": "Student registry." },
+    "/library_logs/{logId}": { "schema": "LibraryLog", "description": "Visitation transactions." },
+    "/temporary_visitors/{visitorId}": { "schema": "Student", "description": "Pending registrations." }
+  }
+}

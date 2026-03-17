@@ -1,0 +1,599 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 30% 97%;
+    --foreground: 220 40% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 40% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 40% 10%;
+    --primary: 221 72% 22%;
+    --primary-foreground: 48 60% 96%;
+    --secondary: 48 40% 94%;
+    --secondary-foreground: 221 72% 22%;
+    --muted: 220 20% 93%;
+    --muted-foreground: 220 15% 50%;
+    --accent: 43 85% 55%;
+    --accent-foreground: 221 72% 12%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 20% 88%;
+    --input: 220 20% 88%;
+    --ring: 221 72% 22%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    /* Prevent horizontal overflow on mobile */
+    box-sizing: border-box;
+  }
+  html {
+    /* Prevent text size inflation on mobile */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+  body {
+    @apply text-foreground antialiased min-h-screen relative bg-transparent;
+    font-family: 'DM Sans', sans-serif;
+    /* Prevent horizontal scroll */
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', Georgia, serif;
+    @apply tracking-tight;
+  }
+  code, .font-mono {
+    font-family: 'DM Mono', 'Courier New', monospace;
+  }
+  /* Make tap targets at least 44px on mobile */
+  button, a, [role="button"] {
+    min-height: 44px;
+  }
+  /* Better touch scrolling */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+/* ============================================================
+   BACKGROUND
+   ============================================================ */
+.institutional-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -50;
+  background-image:
+    linear-gradient(
+      135deg,
+      rgba(10, 26, 77, 0.50) 0%,
+      rgba(10, 26, 77, 0.28) 40%,
+      rgba(10, 26, 77, 0.40) 100%
+    ),
+    url('/neulibrary.jpg');
+  background-size: cover;
+  background-position: center center;
+  background-repeat: no-repeat;
+}
+
+/* ============================================================
+   GLASS CARDS
+   ============================================================ */
+.glass-card {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 4px 24px rgba(10, 26, 77, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  border-radius: 1rem;
+  transition: box-shadow 0.3s ease;
+}
+
+.glass-dark {
+  background: rgba(10, 26, 77, 0.90);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  box-shadow: 0 2px 20px rgba(0, 0, 0, 0.20);
+}
+
+.school-card {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 4px 24px rgba(10, 26, 77, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.80);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.55);
+  box-shadow: 0 4px 24px rgba(10, 26, 77, 0.10);
+}
+
+/* ============================================================
+   KIOSK BUTTONS — mobile-first
+   ============================================================ */
+.kiosk-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* Comfortable touch padding */
+  padding: 1.5rem 1rem;
+  gap: 0.75rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  border-radius: 1.25rem;
+  box-shadow: 0 4px 24px rgba(10, 26, 77, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, background 0.25s ease;
+  cursor: pointer;
+  /* iOS touch fix */
+  -webkit-appearance: none;
+  touch-action: manipulation;
+}
+
+.kiosk-button:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 12px rgba(10, 26, 77, 0.12);
+}
+
+@media (hover: hover) {
+  .kiosk-button:hover {
+    transform: translateY(-4px) scale(1.01);
+    box-shadow: 0 20px 50px rgba(10, 26, 77, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+    border-color: rgba(10, 26, 77, 0.18);
+    background: rgba(255, 255, 255, 0.95);
+  }
+  .kiosk-button:hover h2 {
+    color: hsl(221, 72%, 18%) !important;
+  }
+  .kiosk-button:hover p {
+    color: hsl(220, 15%, 50%) !important;
+  }
+  .kiosk-button:hover .kiosk-icon-wrapper {
+    background: hsl(221, 72%, 22%, 0.14);
+    color: hsl(221, 72%, 18%);
+    transform: scale(1.08) rotate(-2deg);
+  }
+}
+
+.kiosk-button > * {
+  position: relative;
+  z-index: 1;
+}
+
+.kiosk-icon-wrapper {
+  padding: 1rem;
+  border-radius: 0.875rem;
+  transition: all 0.25s ease;
+  background: rgba(10, 26, 77, 0.08);
+  color: hsl(221, 72%, 22%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ============================================================
+   STAT CARDS
+   ============================================================ */
+.smart-stat-card {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  box-shadow: 0 4px 20px rgba(10, 26, 77, 0.08);
+  padding: 1.25rem;
+  border-radius: 1rem;
+  transition: all 0.25s ease;
+}
+
+@media (hover: hover) {
+  .smart-stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 36px rgba(10, 26, 77, 0.12);
+  }
+}
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+.gold-badge {
+  background: linear-gradient(135deg, hsl(43, 85%, 60%), hsl(38, 90%, 52%));
+  color: hsl(221, 72%, 12%);
+  font-weight: 700;
+  font-size: 0.6rem;
+  padding: 3px 10px;
+  border-radius: 9999px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  display: inline-block;
+}
+
+.neu-seal {
+  background: linear-gradient(135deg, hsl(221, 72%, 18%), hsl(221, 60%, 32%));
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.20);
+  box-shadow: 0 4px 16px rgba(10, 26, 77, 0.35), inset 0 1px 0 rgba(255,255,255,0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+}
+
+.label-caps {
+  font-size: 0.625rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.10em;
+  color: hsl(220, 15%, 55%);
+  font-family: 'DM Sans', sans-serif;
+}
+
+.hero-title {
+  font-family: 'Playfair Display', Georgia, serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: white;
+}
+
+.hero-subtitle {
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.65);
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ============================================================
+   ANIMATIONS
+   ============================================================ */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes livePulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+  50%       { opacity: 0.8; box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
+}
+
+.animate-slide-up { animation: slideUp 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+.animate-fade-in  { animation: fadeIn  0.35s ease forwards; }
+
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 70ms; }
+.stagger > *:nth-child(3) { animation-delay: 140ms; }
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #10b981;
+  animation: livePulse 2s ease infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   TAB ACTIVE STATE
+   ============================================================ */
+[role=tab][data-state=active] {
+  background: linear-gradient(135deg, hsl(221,72%,22%), hsl(221,60%,32%)) !important;
+  color: white !important;
+  box-shadow: 0 3px 12px rgba(10,26,77,0.22) !important;
+}
+[role=tab][data-state=inactive] {
+  color: hsl(220,15%,50%) !important;
+  background: transparent !important;
+}
+[role=tab][data-state=inactive]:hover {
+  background: rgba(10,26,77,0.06) !important;
+  color: hsl(221,72%,22%) !important;
+}
+
+/* ============================================================
+   ACCORDION
+   ============================================================ */
+@keyframes accordion-down {
+  from { height: 0; }
+  to   { height: var(--radix-accordion-content-height); }
+}
+@keyframes accordion-up {
+  from { height: var(--radix-accordion-content-height); }
+  to   { height: 0; }
+}
+.animate-accordion-down { animation: accordion-down 0.2s ease-out; }
+.animate-accordion-up   { animation: accordion-up   0.2s ease-out; }
+
+/* ============================================================
+   MOBILE NAV BOTTOM BAR (for dashboards on small screens)
+   ============================================================ */
+.mobile-nav-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: rgba(10, 26, 77, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(255,255,255,0.10);
+  padding: 0.5rem 1rem;
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+}
+
+.mobile-nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  transition: background 0.2s ease;
+  color: rgba(255,255,255,0.45);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  min-width: 52px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+
+.mobile-nav-item.active {
+  color: white;
+  background: rgba(255,255,255,0.12);
+}
+
+.mobile-nav-item.active svg {
+  color: hsl(43, 85%, 60%);
+}
+
+/* ============================================================
+   RESPONSIVE TABLE — stack on mobile
+   ============================================================ */
+@media (max-width: 640px) {
+  .responsive-table thead {
+    display: none;
+  }
+  .responsive-table tr {
+    display: flex;
+    flex-direction: column;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(10,26,77,0.06);
+  }
+  .responsive-table td {
+    padding: 0.2rem 0;
+    border: none;
+  }
+}
+
+/* ============================================================
+   SAFE AREA — notch/home indicator support
+   ============================================================ */
+.safe-bottom {
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
+}
+.safe-top {
+  padding-top: max(0px, env(safe-area-inset-top));
+}
+
+/* ============================================================
+   MOBILE / TOUCH FIXES
+   ============================================================ */
+
+/* Prevent text size inflation on iOS */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Safe area insets for notched phones */
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Remove tap highlight on mobile */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Touch-friendly minimum tap targets */
+button, [role=button], a {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Exception for icon-only small buttons */
+button.h-8, button.h-9 {
+  min-height: unset;
+  min-width: unset;
+}
+
+/* Kiosk cards — tighter padding on mobile */
+@media (max-width: 640px) {
+  .kiosk-button {
+    padding: 1.5rem 1.25rem;
+    gap: 0.75rem;
+    border-radius: 1.25rem;
+  }
+
+  .kiosk-icon-wrapper {
+    padding: 0.875rem;
+  }
+
+  /* Disable hover animations on touch devices */
+  .kiosk-button:hover {
+    transform: none;
+  }
+
+  .smart-stat-card {
+    padding: 1.25rem;
+  }
+
+  .school-card {
+    border-radius: 1rem;
+  }
+
+  .glass-card {
+    border-radius: 0.875rem;
+  }
+}
+
+/* Tab bar — ensure it scrolls smoothly on touch */
+.tabs-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+}
+
+/* Tables — horizontal scroll on mobile */
+.table-scroll-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Backdrop blur — reduce on low-end devices for performance */
+@media (prefers-reduced-motion: reduce) {
+  .glass-card,
+  .glass-dark,
+  .school-card,
+  .smart-stat-card {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  .animate-slide-up,
+  .animate-fade-in,
+  .animate-scale-in {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================
+   MOBILE / TOUCH OPTIMIZATIONS
+   ============================================================ */
+
+/* Prevent iOS zoom on input focus */
+@media screen and (max-width: 768px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Ensure tap targets are at least 44px */
+button, [role=button], a {
+  min-height: 36px;
+}
+
+/* Remove tap highlight on mobile */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Safe area padding for phones with notches */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Fix fixed bottom nav above phone home indicator */
+.mobile-bottom-nav {
+  padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* Card padding smaller on mobile */
+@media (max-width: 640px) {
+  .school-card .p-10 { padding: 1.25rem !important; }
+  .school-card .p-8  { padding: 1rem !important; }
+}
+
+/* ============================================================
+   FONT SIZE IMPROVEMENTS — More readable across all screens
+   ============================================================ */
+
+/* Base body size bump */
+body {
+  font-size: 16px;
+}
+
+/* Table cells readable */
+td, th {
+  font-size: 0.875rem;
+}
+
+/* Labels throughout app */
+.label-caps {
+  font-size: 0.68rem !important;
+  letter-spacing: 0.1em;
+}
+
+/* Stat card values */
+.smart-stat-card p {
+  font-size: 0.75rem;
+}
+
+/* Inputs */
+input, select, textarea, button {
+  font-size: 0.9rem;
+}
+
+/* Badge text minimum */
+[class*="rounded-full"], [class*="rounded-lg"] {
+  font-size: inherit;
+}
+
+/* Increase table header text */
+thead th {
+  font-size: 0.75rem !important;
+}
+
+/* Sidebar nav items */
+nav button, nav a {
+  font-size: 0.9rem;
+}

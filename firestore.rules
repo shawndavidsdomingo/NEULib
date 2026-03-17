@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Hard-whitelisted owner email — always super admin
+    function isOwnerEmail() {
+      return isSignedIn() &&
+        request.auth.token.email == "shawndavidsobremontedomingo@gmail.com";
+    }
+
+    // Any signed-in non-anonymous user with a verified email
+    function isAuthenticatedUser() {
+      return isSignedIn() && request.auth.token.email != null;
+    }
+
+    // NEU institutional email — covers all appointed staff (@neu.edu.ph)
+    // plus the hardcoded owner gmail
+    function isNEUEmail() {
+      return isAuthenticatedUser() &&
+        (request.auth.token.email.matches('.*@neu\\.edu\\.ph') ||
+         request.auth.token.email == "shawndavidsobremontedomingo@gmail.com");
+    }
+
+    // /users — unified collection
+    // NOTE: Doc IDs are student/staff IDs (e.g. "24-12864-481"), NOT Firebase UIDs.
+    // Because UIDs != doc IDs we cannot do server-side role lookups in rules.
+    // Deletes are restricted to NEU institutional emails — the app UI further
+    // enforces that only super_admin role users see the delete button.
+    match /users/{userId} {
+      allow read:   if isAuthenticatedUser();
+      allow create: if isSignedIn();
+      allow update: if isOwnerEmail() ||
+                       isNEUEmail() ||
+                       (isAuthenticatedUser() && resource.data.email == request.auth.token.email);
+      allow delete: if isNEUEmail() || isOwnerEmail();
+    }
+
+    match /departments/{deptID} {
+      allow read: if true;
+      allow write: if isNEUEmail() || isOwnerEmail();
+    }
+
+    match /library_logs/{logId} {
+      allow read:   if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isAuthenticatedUser();
+      allow delete: if isNEUEmail() || isOwnerEmail();
+    }
+
+    match /programs/{programId} {
+      allow read: if true;
+      allow write: if isNEUEmail() || isOwnerEmail();
+    }
+
+    match /notifications/{notifId} {
+      allow read:   if isSignedIn();
+      allow create: if isAuthenticatedUser();
+      allow update: if isSignedIn();
+      allow delete: if isAuthenticatedUser();
+    }
+
+    // /visit_purposes — Firestore-backed kiosk purpose list
+    // Public read so the anonymous kiosk terminal can fetch it
+    // Writable only by NEU institutional staff
+    match /visit_purposes/{purposeId} {
+      allow read:  if true;
+      allow write: if isNEUEmail() || isOwnerEmail();
+    }
+
+    // /audit_logs — append-only record of all admin actions
+    // Any authenticated user can create (staff log their own actions)
+    // NEU staff can read; only NEU email can delete (for cleanup)
+    // Updates are disabled — audit logs are immutable
+    match /audit_logs/{logId} {
+      allow read:   if isNEUEmail() || isOwnerEmail();
+      allow create: if isAuthenticatedUser();
+      allow update: if false;
+      allow delete: if isNEUEmail() || isOwnerEmail();
+    }
+  }
+}

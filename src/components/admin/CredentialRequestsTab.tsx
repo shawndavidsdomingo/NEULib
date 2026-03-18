@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useFirestore, useCollection, useMemoFirebase, useUser } from '@/firebase';
-import { collection, query, orderBy, doc, updateDoc, addDoc } from 'firebase/firestore';
+import { collection, query, orderBy, doc, updateDoc, addDoc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { writeAuditLog } from '@/lib/audit-logger';
 
@@ -128,13 +128,11 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
         const newId = req.requested.studentId;
         if (!newId) throw new Error('No new studentId in request');
         // 1. Read the current user doc
-        const { getDoc } = await import('firebase/firestore');
         const oldSnap = await getDoc(doc(db, 'users', req.studentId));
         if (!oldSnap.exists()) throw new Error('Original user doc not found');
         const oldData = oldSnap.data();
         // 2. Write to new doc with updated ID fields
-        const { setDoc: setDocFn, deleteDoc } = await import('firebase/firestore');
-        await setDocFn(doc(db, 'users', newId), { ...oldData, id: newId, studentId: newId });
+        await setDoc(doc(db, 'users', newId), { ...oldData, id: newId, studentId: newId });
         // 3. Delete old doc
         await deleteDoc(doc(db, 'users', req.studentId));
         // 4. Update request as approved

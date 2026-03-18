@@ -9,7 +9,6 @@ import { startOfDay as startOfDayFn } from 'date-fns';
 import { UserRecord } from '@/lib/firebase-schema';
 
 const navy = 'hsl(221,72%,22%)';
-const navyGrad = 'linear-gradient(135deg,hsl(221,72%,18%),hsl(221,72%,28%))';
 
 interface Props {
   adminUser: UserRecord | null;
@@ -51,26 +50,25 @@ export default function WelcomeMessage({ adminUser, onDismiss }: Props) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(10,26,77,0.85)', backdropFilter: 'blur(12px)' }}>
+      style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }}>
       <div className="w-full max-w-md animate-in zoom-in-95 duration-500"
         style={{ fontFamily: "'DM Sans',sans-serif" }}>
 
         {/* Card */}
         <div className="rounded-3xl overflow-hidden shadow-2xl">
 
-          {/* Navy header */}
-          <div className="px-8 pt-8 pb-6 text-white text-center"
-            style={{ background: navyGrad }}>
+          {/* Header — clean white with navy accent */}
+          <div className="px-8 pt-8 pb-6 text-center border-b border-slate-100">
             {/* Avatar */}
-            <div className="w-20 h-20 rounded-2xl flex items-center justify-center font-bold text-2xl text-white mx-auto mb-4"
-              style={{ background: 'linear-gradient(135deg,hsl(43,85%,55%),hsl(38,90%,48%))' }}>
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center font-bold text-xl text-white mx-auto mb-4"
+              style={{ background: 'linear-gradient(135deg,hsl(43,85%,52%),hsl(38,90%,44%))' }}>
               {initials}
             </div>
-            <p className="text-white/55 text-xs font-bold uppercase tracking-widest mb-1">{greeting}</p>
-            <h1 className="text-2xl font-bold" style={{ fontFamily: "'Playfair Display',serif" }}>
+            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-1">{greeting}</p>
+            <h1 className="text-2xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
               {displayName}
             </h1>
-            <p className="text-white/50 text-sm font-semibold mt-1">{role}</p>
+            <p className="text-slate-500 text-sm font-semibold mt-1">{role}</p>
           </div>
 
           {/* Stats */}

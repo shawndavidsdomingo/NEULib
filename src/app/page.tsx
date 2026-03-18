@@ -238,13 +238,14 @@ export default function Home() {
       const userRecord = await resolveUserByEmail(email);
 
       if (userRecord) {
-        // Already registered — show toast and route to kiosk
-        toast({
-          title: 'Already Registered',
-          description: 'Your account exists. Directing you to the kiosk.',
-        });
+        // Already registered — show popup then redirect to kiosk after 5s
         setResolvedUser(userRecord);
-        setView('terminal');
+        setAlreadyRegUser(userRecord);
+        setAlreadyRegistered(true);
+        setTimeout(() => {
+          setAlreadyRegistered(false);
+          setView('terminal');
+        }, 5000);
         return;
       }
 
@@ -307,7 +308,9 @@ export default function Home() {
     }
   };
 
-  const [showCredModal, setShowCredModal] = useState(false);
+  const [showCredModal,       setShowCredModal]       = useState(false);
+  const [alreadyRegistered,   setAlreadyRegistered]   = useState(false);
+  const [alreadyRegUser,      setAlreadyRegUser]      = useState<UserRecord | null>(null);
 
   const handleExit = () => {
     setView('selection');
@@ -355,7 +358,7 @@ export default function Home() {
       <header className="relative z-10 px-4 sm:px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="neu-seal flex-shrink-0 overflow-hidden" style={{ width: 36, height: 36, padding: 0 }}>
-            <img src="neu_logo.png" alt="NEU" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+            <img src="/NEULib/neu_logo.png" alt="NEU" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
           </div>
           <span className="text-white font-bold text-sm hidden sm:block" style={{ letterSpacing: '0.06em' }}>New Era University</span>
         </div>
@@ -379,24 +382,26 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Top row: Kiosk + Staff */}
+        {/* ── Primary Access Cards ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-2xl">
+          {/* KIOSK */}
           <button onClick={() => setView('terminal')} className="kiosk-button">
             <div className="kiosk-icon-wrapper"><UserCheck size={30} /></div>
             <div>
-              <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display',serif" }}>Visitor Kiosk</h2>
-              <p className="text-slate-400 mt-1 font-semibold text-sm">Check-in / Check-out</p>
+              <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display',serif" }}>Kiosk</h2>
+              <p className="text-slate-400 mt-1 font-semibold text-sm">Daily Check-in / Check-out</p>
             </div>
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold" style={{ background: 'rgba(10,26,77,0.07)', color: 'hsl(221,72%,22%)' }}>
               <Radio size={9} className="animate-pulse" /> RFID / ID Scan
             </div>
           </button>
 
+          {/* ADMIN */}
           <button className="kiosk-button" onClick={() => setIsAdminLoginOpen(true)}>
             <div className="kiosk-icon-wrapper"><ShieldCheck size={30} /></div>
             <div>
-              <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display',serif" }}>Staff Console</h2>
-              <p className="text-slate-400 mt-1 font-semibold text-sm">Administrative Access</p>
+              <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display',serif" }}>Admin</h2>
+              <p className="text-slate-400 mt-1 font-semibold text-sm">Dashboard Management</p>
             </div>
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold" style={{ background: 'rgba(10,26,77,0.07)', color: 'hsl(221,72%,22%)' }}>
               <ArrowRight size={9} /> Staff Login
@@ -404,38 +409,61 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Register — full kiosk button */}
-        <div className="w-full max-w-2xl">
-          <button onClick={handleRegisterClick} className="kiosk-button w-full" disabled={isAuthenticating}>
-            <div className="kiosk-icon-wrapper">
-              {isAuthenticating ? <Loader2 size={30} className="animate-spin" /> : <FileEdit size={30} />}
-            </div>
-            <div>
-              <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: "'Playfair Display',serif" }}>Register</h2>
-              <p className="text-slate-400 mt-1 font-semibold text-sm">New Student Registration</p>
-            </div>
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold" style={{ background: 'rgba(10,26,77,0.07)', color: 'hsl(221,72%,22%)' }}>
-              @neu.edu.ph Required
-            </div>
-          </button>
-        </div>
-
-        {/* Student Login + Request Credential Change — compact, equal-weight row */}
+        {/* ── Secondary Action Buttons ── */}
         <div className="grid grid-cols-2 gap-3 w-full max-w-2xl">
-          <button onClick={handleStudentLogin} disabled={isAuthenticating}
+          {/* Register */}
+          <button onClick={handleRegisterClick} disabled={isAuthenticating}
             className="flex items-center justify-center gap-2 h-12 rounded-2xl font-bold text-sm transition-all active:scale-95 disabled:opacity-60"
             style={{ background: 'rgba(255,255,255,0.13)', backdropFilter: 'blur(10px)', color: 'white', border: '1px solid rgba(255,255,255,0.25)' }}>
             {isAuthenticating ? <Loader2 size={15} className="animate-spin" /> : <UserCircle size={15} />}
-            Student Login
+            Register
           </button>
+          {/* Request Credential */}
           <button onClick={() => setIsCredAuthOpen(true)} disabled={isAuthenticating}
             className="flex items-center justify-center gap-2 h-12 rounded-2xl font-bold text-sm transition-all active:scale-95 disabled:opacity-60"
             style={{ background: 'rgba(255,255,255,0.13)', backdropFilter: 'blur(10px)', color: 'white', border: '1px solid rgba(255,255,255,0.25)' }}>
             <FileEdit size={15} />
-            Request Credentials
+            Request Credential
           </button>
         </div>
       </div>
+
+      {/* ── Already Registered popup (kiosk style) ── */}
+      {alreadyRegistered && alreadyRegUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)' }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in duration-300">
+            <div className="px-8 py-7 text-center"
+              style={{ background: 'linear-gradient(135deg,hsl(221,72%,18%),hsl(221,72%,28%))' }}>
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-3"
+                style={{ background: 'rgba(255,255,255,0.15)' }}>
+                <UserCircle size={32} className="text-white" />
+              </div>
+              <h3 className="text-xl font-bold text-white" style={{ fontFamily: "'Playfair Display',serif" }}>
+                Already Registered!
+              </h3>
+              <p className="text-white/60 text-xs font-semibold mt-1 uppercase tracking-widest">
+                {alreadyRegUser.deptID || 'NEU Library'}
+              </p>
+            </div>
+            <div className="px-8 py-6 text-center space-y-4">
+              <p className="text-slate-700 font-medium text-sm leading-relaxed">
+                You are already registered in the system as <strong>{alreadyRegUser.firstName} {alreadyRegUser.lastName}</strong>.
+                Redirecting you to the Kiosk…
+              </p>
+              <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-medium">
+                <Loader2 size={12} className="animate-spin" />
+                Redirecting in 5 seconds
+              </div>
+              <button onClick={() => { setAlreadyRegistered(false); setView('terminal'); }}
+                className="w-full h-11 rounded-2xl font-bold text-sm text-white transition-all active:scale-95"
+                style={{ background: 'linear-gradient(135deg,hsl(221,72%,22%),hsl(221,60%,32%))' }}>
+                Go to Kiosk Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Wrong domain popup ── */}
       {wrongDomainEmail && (

@@ -56,7 +56,6 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
   const navItems = [
     { id: 'overview', label: 'Overview',        icon: LayoutDashboard },
     { id: 'presence', label: 'Live Presence',   icon: MapPin },
-    { id: 'traffic',  label: 'Live Presence',    icon: Activity },
     { id: 'history', label: 'Log History', icon: History },
     { id: 'users',    label: 'Registry',        icon: Users },
     { id: 'temp',     label: 'Pending',         icon: Clock },
@@ -75,8 +74,7 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
       title: '📊 Monitoring & Real-Time Data',
       items: [
         { id: 'presence', label: 'Live Presence',   icon: MapPin },
-        { id: 'traffic',  label: 'Live Presence',    icon: Activity },
-        { id: 'history', label: 'Log History', icon: History },
+            { id: 'history', label: 'Log History', icon: History },
       ],
     },
     {
@@ -115,7 +113,6 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
                     {([
                       { icon: Users,    label: 'Registry',      id: 'users',    color: navy },
                       { icon: MapPin,   label: 'Live Presence', id: 'presence', color: '#059669' },
-                      { icon: Activity, label: 'Live Presence',  id: 'traffic',  color: '#0891b2' },
                       { icon: FileText, label: 'Reports',       id: 'reports',  color: '#d97706' },
                       { icon: Clock,    label: 'Pending',       id: 'temp',     color: '#7c3aed' },
                       { icon: Scan,     label: 'Kiosk',         id: 'kiosk',    color: '#64748b' },
@@ -144,7 +141,6 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
         </div>
       );
       case 'presence': return <CurrentVisitors />;
-      case 'traffic': return <CurrentVisitors />;
       case 'users':    return <UserManagement isSuperAdmin={false} />;
       case 'temp':     return <TemporaryVisitorManagement isSuperAdmin={false} />;
       case 'reports':  return <ReportModule isSuperAdmin={false} />;

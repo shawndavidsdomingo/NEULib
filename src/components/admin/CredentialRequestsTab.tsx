@@ -14,6 +14,7 @@ import { useFirestore, useCollection, useMemoFirebase, useUser } from '@/firebas
 import { collection, query, orderBy, doc, updateDoc, addDoc, getDoc, setDoc, deleteDoc, writeBatch, getDocs, where, limit } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { writeAuditLog } from '@/lib/audit-logger';
+import { notificationId } from '@/lib/firestore-ids';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface CredentialRequest {
@@ -80,7 +81,8 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
   const [saving, setSaving] = useState(false);
 
   const sendStudentNotif = async (studentId: string, message: string) => {
-    await addDoc(collection(db, 'notifications'), {
+    const nid = notificationId(studentId);
+    await setDoc(doc(db, 'notifications', nid), {
       studentId, message, type: 'credential_request',
       sentAt: new Date().toISOString(), read: false,
     });
@@ -161,7 +163,7 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
         writeAuditLog(db, user, 'user.edit', { targetId: newId, targetName: req.studentName, detail: `Student ID changed from ${req.studentId} to ${newId}` });
       }
 
-      toast({ title: 'Request Approved'});
+      toast({ title: 'Request Approved', description: 'Student has been notified.' });
       onDone();
     } catch (err: any) {
       const msg = err?.message || err?.code || 'Unknown error';
@@ -178,7 +180,7 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
       await updateDoc(doc(db, 'credential_requests', req.id), { status: 'revoked', adminNote: reason, updatedAt: new Date().toISOString() });
       await sendStudentNotif(req.studentId, `Your credential change request has been revoked. Reason: ${reason}`);
       writeAuditLog(db, user, 'user.edit', { targetId: req.studentId, targetName: req.studentName, detail: `Credential request revoked: ${reason}` });
-      toast({ title: 'Request Revoked'});
+      toast({ title: 'Request Revoked', description: 'Student has been notified.' });
       onDone();
     } catch (err: any) {
       const msg = err?.message || err?.code || 'Unknown error';

@@ -364,21 +364,34 @@ export default function Home() {
           <span className="text-white font-bold text-sm hidden sm:block" style={{ letterSpacing: '0.06em' }}>New Era University</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 text-white/40 text-xs font-semibold">
-            <Radio size={9} className="animate-pulse text-green-400" /> Live System
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full font-bold text-xs"
+            style={{ background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: 'rgba(134,239,172,0.95)' }}>
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-400" />
+            </span>
+            Live System
           </div>
         </div>
       </header>
 
       <div className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 py-8 gap-8 relative z-10">
-        <div className="text-center space-y-3">
-          <div className="space-y-2">
-            <h1 className="hero-title text-3xl sm:text-5xl md:text-6xl">NEU Library Portal</h1>
-            <p className="hero-subtitle" style={{ letterSpacing: '0.25em', fontSize: '0.6rem' }}>Institutional Access & Presence Management</p>
-            <div className="flex items-center justify-center gap-3 pt-1">
-              <div className="h-px w-10" style={{ background: 'linear-gradient(90deg,transparent,rgba(200,160,40,0.5))' }} />
+        <div className="text-center space-y-4">
+          {/* NEU Logo — large, prominent */}
+          <div className="flex flex-col items-center gap-4">
+            <div className="overflow-hidden shadow-2xl"
+              style={{ width: 96, height: 96, borderRadius: '50%', border: '3px solid rgba(200,160,40,0.5)', boxShadow: '0 0 40px rgba(200,160,40,0.25)' }}>
+              <img src="neu_logo.png" alt="NEU"
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            </div>
+            <div className="space-y-1">
+              <h1 className="hero-title text-4xl sm:text-6xl md:text-7xl">NEU Library Portal</h1>
+              <p className="hero-subtitle" style={{ letterSpacing: '0.25em', fontSize: '0.65rem' }}>Institutional Access & Presence Management</p>
+            </div>
+            <div className="flex items-center justify-center gap-3">
+              <div className="h-px w-14" style={{ background: 'linear-gradient(90deg,transparent,rgba(200,160,40,0.5))' }} />
               <span className="text-white/40 text-xs">✦</span>
-              <div className="h-px w-10" style={{ background: 'linear-gradient(90deg,rgba(200,160,40,0.5),transparent)' }} />
+              <div className="h-px w-14" style={{ background: 'linear-gradient(90deg,rgba(200,160,40,0.5),transparent)' }} />
             </div>
           </div>
         </div>

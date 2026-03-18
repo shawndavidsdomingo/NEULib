@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { format, parseISO, isToday, differenceInMinutes, startOfDay } from 'date-fns';
-import { Loader2, Users, Search, Filter, Radio, Clock } from 'lucide-react';
+import { Loader2, Users, Search, Filter, Radio, Clock, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, orderBy, where } from 'firebase/firestore';
 import { LibraryLogRecord, DepartmentRecord } from '@/lib/firebase-schema';
@@ -19,7 +19,7 @@ const card: React.CSSProperties = {
   borderRadius: '1rem',
 };
 
-const PURPOSES = ['All Purposes', 'Reading Books', 'Research', 'Computer Use', 'Assignments'];
+
 
 export function CurrentVisitors() {
   const db  = useFirestore();
@@ -32,6 +32,22 @@ export function CurrentVisitors() {
   const [deptFilter,    setDeptFilter]    = useState('All Departments');
   const [purposeFilter, setPurposeFilter] = useState('All Purposes');
   const [statusFilter,  setStatusFilter]  = useState('Inside');
+
+  // Sort state
+  const [sortField, setSortField] = useState<'studentName' | 'studentId' | 'deptID' | 'purpose' | 'checkInTimestamp' | 'duration'>('checkInTimestamp');
+  const [sortDir,   setSortDir]   = useState<'asc' | 'desc'>('desc');
+
+  const toggleSort = (field: typeof sortField) => {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('asc'); }
+  };
+
+  const SortIcon = ({ field }: { field: typeof sortField }) => {
+    if (sortField !== field) return <ArrowUpDown size={11} className="ml-1 opacity-30 inline" />;
+    return sortDir === 'asc'
+      ? <ArrowUp   size={11} className="ml-1 inline" style={{ color: navy }} />
+      : <ArrowDown size={11} className="ml-1 inline" style={{ color: navy }} />;
+  };
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 30000);
@@ -53,6 +69,16 @@ export function CurrentVisitors() {
 
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
+
+  // Dynamic purposes from Firestore — updates instantly when purposes are added/removed
+  const purposesRef2 = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
+  const { data: purposeDocs } = useCollection<{ id: string; label: string; active: boolean }>(purposesRef2);
+  const livePurposes = useMemo(() => {
+    const base = ['All Purposes'];
+    if (!purposeDocs || purposeDocs.length === 0) return [...base, 'Reading Books', 'Research', 'Computer Use', 'Assignments'];
+    const active = purposeDocs.filter(p => p.active !== false).map(p => p.label).sort();
+    return [...base, ...active];
+  }, [purposeDocs]);
 
   // allLogs is already filtered to today by the Firestore query — this is a safety-net passthrough
   const todayLogs = useMemo(() => allLogs ?? [], [allLogs]);
@@ -81,6 +107,25 @@ export function CurrentVisitors() {
     const diff = differenceInMinutes(checkOut ? parseISO(checkOut) : now, parseISO(checkIn));
     return diff < 60 ? `${diff}m` : `${Math.floor(diff / 60)}h ${diff % 60}m`;
   };
+
+  // Apply column sort to filteredLogs
+  const sortedLogs = useMemo(() => {
+    return [...filteredLogs].sort((a, b) => {
+      let va = '', vb = '';
+      if      (sortField === 'studentName')      { va = a.studentName || ''; vb = b.studentName || ''; }
+      else if (sortField === 'studentId')        { va = a.studentId;  vb = b.studentId; }
+      else if (sortField === 'deptID')           { va = a.deptID;     vb = b.deptID; }
+      else if (sortField === 'purpose')          { va = a.purpose;    vb = b.purpose; }
+      else if (sortField === 'checkInTimestamp') { va = a.checkInTimestamp; vb = b.checkInTimestamp; }
+      else if (sortField === 'duration') {
+        const da = differenceInMinutes(a.checkOutTimestamp ? parseISO(a.checkOutTimestamp) : now, parseISO(a.checkInTimestamp));
+        const db2 = differenceInMinutes(b.checkOutTimestamp ? parseISO(b.checkOutTimestamp) : now, parseISO(b.checkInTimestamp));
+        return sortDir === 'asc' ? da - db2 : db2 - da;
+      }
+      const cmp = va < vb ? -1 : va > vb ? 1 : 0;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [filteredLogs, sortField, sortDir, now]);
 
 
 
@@ -158,7 +203,7 @@ export function CurrentVisitors() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="rounded-xl">
-              {PURPOSES.map(p => <SelectItem key={p} value={p} className="font-semibold text-sm">{p}</SelectItem>)}
+              {livePurposes.map(p => <SelectItem key={p} value={p} className="font-semibold text-sm">{p}</SelectItem>)}
             </SelectContent>
           </Select>
 
@@ -199,17 +244,29 @@ export function CurrentVisitors() {
             <Table>
               <TableHeader>
                 <TableRow className="h-11 border-slate-100">
-                  <TableHead className={`pl-5 ${thStyle}`}>Student</TableHead>
-                  <TableHead className={thStyle}>ID</TableHead>
-                  <TableHead className={thStyle}>Dept</TableHead>
-                  <TableHead className={thStyle}>Purpose</TableHead>
-                  <TableHead className={thStyle}>Time In</TableHead>
-                  <TableHead className={thStyle}>Time Inside</TableHead>
+                  <TableHead className={`pl-5 cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('studentName')}>
+                    Student <SortIcon field="studentName" />
+                  </TableHead>
+                  <TableHead className={`cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('studentId')}>
+                    ID <SortIcon field="studentId" />
+                  </TableHead>
+                  <TableHead className={`cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('deptID')}>
+                    Dept <SortIcon field="deptID" />
+                  </TableHead>
+                  <TableHead className={`cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('purpose')}>
+                    Purpose <SortIcon field="purpose" />
+                  </TableHead>
+                  <TableHead className={`cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('checkInTimestamp')}>
+                    Time In <SortIcon field="checkInTimestamp" />
+                  </TableHead>
+                  <TableHead className={`cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('duration')}>
+                    Time Inside <SortIcon field="duration" />
+                  </TableHead>
                   <TableHead className={`text-right pr-5 ${thStyle}`}>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredLogs.map(log => {
+                {sortedLogs.map(log => {
                   const isInside = !log.checkOutTimestamp;
                   const dur = formatDur(log.checkInTimestamp, log.checkOutTimestamp);
                   return (

@@ -6,7 +6,8 @@ import { X, FileEdit, IdCard, GraduationCap, User, ChevronRight, Loader2 } from 
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, addDoc, query, where } from 'firebase/firestore';
+import { collection, addDoc, query, where, doc, setDoc } from 'firebase/firestore';
+import { credentialRequestId } from '@/lib/firestore-ids';
 import { UserRecord, DEPARTMENTS, ProgramRecord } from '@/lib/firebase-schema';
 import { formatStudentId } from '@/lib/student-id-formatter';
 import { useToast } from '@/hooks/use-toast';
@@ -72,7 +73,8 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
 
       if (type === 'name') {
         if (!nameReason.trim()) { toast({ title: 'Reason is required', variant: 'destructive' }); setSubmitting(false); return; }
-        await addDoc(collection(db, 'credential_requests'), {
+        const credDocId = credentialRequestId();
+        await setDoc(doc(db, 'credential_requests', credDocId), {
           ...base,
           requested: { firstName: newFirst.trim(), middleName: newMiddle.trim(), lastName: newLast.trim() },
           current:   { firstName: profile.firstName, middleName: profile.middleName || '', lastName: profile.lastName },
@@ -84,7 +86,8 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
           setSubmitting(false); return;
         }
         if (!idReason.trim()) { toast({ title: 'Reason is required', variant: 'destructive' }); setSubmitting(false); return; }
-        await addDoc(collection(db, 'credential_requests'), {
+        const credDocId = credentialRequestId();
+        await setDoc(doc(db, 'credential_requests', credDocId), {
           ...base,
           requested: { studentId: newId.trim() },
           current:   { studentId: profile.id },
@@ -94,7 +97,8 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
         });
       } else if (type === 'dept_program') {
         if (!newDept || !deptReason.trim()) { toast({ title: 'Department and reason are required', variant: 'destructive' }); setSubmitting(false); return; }
-        await addDoc(collection(db, 'credential_requests'), {
+        const credDocId = credentialRequestId();
+        await setDoc(doc(db, 'credential_requests', credDocId), {
           ...base,
           requested: { deptID: newDept, program: newProgram },
           current:   { deptID: profile.deptID || '', program: profile.program || '' },

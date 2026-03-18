@@ -8,7 +8,7 @@
  *   await writeAuditLog(db, user, 'user.block', { targetId: student.id, targetName: 'Juan Cruz', detail: 'Blocked for overdue books' });
  */
 
-import { Firestore, collection, addDoc } from 'firebase/firestore';
+import { Firestore, collection, doc, setDoc } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import type { AuditAction } from '@/components/admin/AuditLogTab';
 
@@ -30,7 +30,17 @@ export async function writeAuditLog(
 ): Promise<void> {
   if (!db || !actor) return;
   try {
-    await addDoc(collection(db, 'audit_logs'), {
+    const ts        = new Date().toISOString();
+    // Sanitize actor name: spaces→underscores, remove slashes and special chars
+    const safeName  = (actor.displayName || actor.email || 'Unknown')
+      .replace(/[\s]+/g, '_')
+      .replace(/[^a-zA-Z0-9_\-]/g, '')
+      .slice(0, 40);
+    // Add 4-char random suffix to prevent millisecond collisions
+    const suffix    = Math.random().toString(36).slice(2, 6);
+    const docId     = `${ts}_${safeName}_${suffix}`;
+
+    await setDoc(doc(db, 'audit_logs', docId), {
       action,
       actorId:    actor.uid,
       actorName:  actor.displayName || actor.email || 'Unknown Admin',
@@ -38,7 +48,7 @@ export async function writeAuditLog(
       targetId:   payload.targetId   ?? null,
       targetName: payload.targetName ?? null,
       detail:     payload.detail     ?? null,
-      timestamp:  new Date().toISOString(),
+      timestamp:  ts,
     });
   } catch {
     // Silently swallow — audit logging must never break the main action

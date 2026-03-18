@@ -114,9 +114,11 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       const inRange   = (isAfter(v, s) || v.getTime() === s.getTime()) && (isBefore(v, e) || v.getTime() === e.getTime());
       const inDept    = deptFilter    === 'All Departments' || l.deptID   === deptFilter;
       const inPurpose = purposeFilter === 'All Purposes'    || l.purpose  === purposeFilter;
+      // No Tap-out = checkOutTimestamp IS NULL (any session without a recorded exit)
+      // With Timeout = checkOutTimestamp IS NOT NULL
       const inTapOut = tapOutFilter === 'all'
         || (tapOutFilter === 'with_timeout' && !!l.checkOutTimestamp)
-        || (tapOutFilter === 'no_tap'       && !l.checkOutTimestamp && !isToday(parseISO(l.checkInTimestamp)));
+        || (tapOutFilter === 'no_tap'       && !l.checkOutTimestamp);
       // Program filter is based on code — since logs don't store program,
       // we skip program filtering at log level (filter is for export context display)
       const inProgram = true; // program shown in filter label only

@@ -4,10 +4,10 @@ import { useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis, Pie, PieChart, Cell, Legend } from 'recharts';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, limit } from 'firebase/firestore';
+import { collection, query, where, orderBy } from 'firebase/firestore';
 import { LibraryLogRecord, DEPARTMENTS } from '@/lib/firebase-schema';
 import { Loader2, PieChart as PieChartIcon, BarChart3, Filter } from 'lucide-react';
-import { format, subDays, parseISO, startOfDay, endOfDay, isWithinInterval, startOfWeek } from 'date-fns';
+import { format, parseISO, startOfDay, endOfDay, isWithinInterval, startOfWeek } from 'date-fns';
 
 const COLORS = [
   'hsl(221,72%,22%)', 'hsl(221,55%,42%)', 'hsl(262,83%,58%)',
@@ -27,25 +27,43 @@ const card: React.CSSProperties = {
   borderRadius: '1rem',
 };
 
+interface VisitPurpose {
+  id: string;
+  label: string;
+  active: boolean;
+}
+
 export function AnalyticsBreakdown() {
   const db = useFirestore();
   const [startDate, setStartDate] = useState(format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'));
   const [endDate,   setEndDate]   = useState(format(new Date(), 'yyyy-MM-dd'));
 
-  const logsQuery = useMemoFirebase(() => query(collection(db, 'library_logs'), limit(5000)), [db]);
+  // FIX: Filter at Firestore level by start date — no more limit(5000) + client-side filter
+  const startISO = useMemo(() => startOfDay(parseISO(startDate)).toISOString(), [startDate]);
+  const endISO   = useMemo(() => endOfDay(parseISO(endDate)).toISOString(),   [endDate]);
+
+  const logsQuery = useMemoFirebase(
+    () => query(
+      collection(db, 'library_logs'),
+      where('checkInTimestamp', '>=', startISO),
+      where('checkInTimestamp', '<=', endISO),
+      orderBy('checkInTimestamp', 'desc')
+    ),
+    [db, startISO, endISO]
+  );
   const { data: logs, isLoading } = useCollection<LibraryLogRecord>(logsQuery);
 
-  const filteredLogs = useMemo(() => {
-    if (!logs) return [];
-    const start = startOfDay(parseISO(startDate));
-    const end   = endOfDay(parseISO(endDate));
-    return logs.filter(l => isWithinInterval(parseISO(l.checkInTimestamp), { start, end }));
-  }, [logs, startDate, endDate]);
+  // FIX: Load all purposes from Firestore — includes hidden ones for admin analytics
+  const purposesRef = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
+  const { data: allPurposes } = useCollection<VisitPurpose>(purposesRef);
+
+  // filteredLogs now equals logs since we filter at the query level
+  const filteredLogs = logs ?? [];
 
   const deptData = useMemo(() => {
     const counts: Record<string, number> = {};
     filteredLogs.forEach(l => {
-      const code = l.deptID || 'N/A';  // use dept code only
+      const code = l.deptID || 'N/A';
       counts[code] = (counts[code] || 0) + 1;
     });
     return Object.entries(counts)
@@ -53,15 +71,25 @@ export function AnalyticsBreakdown() {
       .map(([name, value]) => ({ name, value }));
   }, [filteredLogs]);
 
+  // FIX: Build purpose data dynamically from all Firestore purposes (includes hidden)
+  // This means new purposes admins add automatically appear in analytics
   const purposeData = useMemo(() => {
     const counts: Record<string, number> = {};
     filteredLogs.forEach(l => { counts[l.purpose] = (counts[l.purpose] || 0) + 1; });
+
+    // If we have purpose docs, use them to ensure all known purposes appear (even with 0 visits)
+    if (allPurposes && allPurposes.length > 0) {
+      allPurposes.forEach(p => {
+        if (!(p.label in counts)) counts[p.label] = 0;
+      });
+    }
+
     return Object.entries(counts)
+      .filter(([, v]) => v > 0) // only show purposes with actual visits in range
       .sort((a, b) => b[1] - a[1])
       .map(([name, visits], i) => ({ name, visits, fill: COLORS[i % COLORS.length] }));
-  }, [filteredLogs]);
+  }, [filteredLogs, allPurposes]);
 
-  // Shared filter bar
   const FilterBar = () => (
     <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl"
       style={{ background: 'rgba(10,26,77,0.04)', border: '1px solid rgba(10,26,77,0.07)' }}>
@@ -134,7 +162,7 @@ export function AnalyticsBreakdown() {
         </div>
       </div>
 
-      {/* By Purpose */}
+      {/* By Purpose — now dynamic, shows all purposes including newly added ones */}
       <div style={card}>
         <div className="p-4 border-b border-slate-100 space-y-3">
           <div className="flex items-center gap-2">

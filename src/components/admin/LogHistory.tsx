@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { format, parseISO, isToday, differenceInMinutes, startOfDay, subDays } from 'date-fns';
 import { History, Search, Filter, Loader2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -19,6 +19,9 @@ const card: React.CSSProperties = {
   borderRadius:   '1rem',
 };
 
+interface ProgramRecord { id: string; deptID: string; code: string; name: string; }
+interface VisitPurpose  { id: string; label: string; active: boolean; }
+
 type SortField = 'studentName' | 'checkInTimestamp' | 'checkOutTimestamp' | 'duration' | 'deptID' | 'purpose' | 'status';
 
 function formatDur(ci: string, co?: string) {
@@ -27,7 +30,6 @@ function formatDur(ci: string, co?: string) {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-// Auto-format student IDs: XX-XXXXX-XXX
 function formatId(id: string) {
   if (!id) return '—';
   const d = id.replace(/\D/g, '');
@@ -41,13 +43,41 @@ export function LogHistory() {
 
   const [search,        setSearch]        = useState('');
   const [deptFilter,    setDeptFilter]    = useState('All Departments');
+  const [programFilter, setProgramFilter] = useState('All Programs');
+  const [purposeFilter, setPurposeFilter] = useState('All Purposes');
   const [statusFilter,  setStatusFilter]  = useState('All');
-  const [dateRange,     setDateRange]     = useState('7');   // days back, or 'all'
+  const [dateRange,     setDateRange]     = useState('7');
   const [sortField,     setSortField]     = useState<SortField>('checkInTimestamp');
   const [sortDir,       setSortDir]       = useState<'asc' | 'desc'>('desc');
 
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
+
+  const programsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
+  const { data: allPrograms } = useCollection<ProgramRecord>(programsRef);
+
+  // FIX: All purposes from Firestore — admin filter shows hidden ones too (for historical data)
+  const purposesRef = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
+  const { data: purposeDocs } = useCollection<VisitPurpose>(purposesRef);
+
+  const livePurposes = useMemo(() => {
+    if (!purposeDocs || purposeDocs.length === 0)
+      return ['All Purposes', 'Reading Books', 'Research', 'Computer Use', 'Assignments'];
+    // Show ALL purposes in admin filter — including hidden ones
+    // Reasoning: if "Reading Books" was hidden, admins still need to filter historical logs that used it
+    return ['All Purposes', ...purposeDocs.map(p => p.label).sort()];
+  }, [purposeDocs]);
+
+  // FIX: Programs filtered by selected dept
+  const deptPrograms = useMemo(() => {
+    if (!allPrograms || deptFilter === 'All Departments') return [];
+    return allPrograms
+      .filter(p => p.deptID === deptFilter)
+      .sort((a, b) => a.code.localeCompare(b.code));
+  }, [allPrograms, deptFilter]);
+
+  // Reset program filter when dept changes
+  useEffect(() => { setProgramFilter('All Programs'); }, [deptFilter]);
 
   const cutoff = dateRange === 'all'
     ? '2024-01-01T00:00:00.000Z'
@@ -69,23 +99,24 @@ export function LogHistory() {
     const s = search.toLowerCase();
     return allLogs.filter(l => {
       const matchS  = !s || (l.studentName||'').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
-      const matchD  = deptFilter === 'All Departments' || l.deptID === deptFilter;
+      const matchD  = deptFilter    === 'All Departments' || l.deptID  === deptFilter;
+      const matchP  = purposeFilter === 'All Purposes'    || l.purpose === purposeFilter;
       const ci      = parseISO(l.checkInTimestamp);
       const noTap   = !l.checkOutTimestamp && !isToday(ci);
       const matchSt = statusFilter === 'All'
         || (statusFilter === 'Active'    && !l.checkOutTimestamp && isToday(ci))
         || (statusFilter === 'Completed' && !!l.checkOutTimestamp)
         || (statusFilter === 'No Tap'    && noTap);
-      return matchS && matchD && matchSt;
+      return matchS && matchD && matchP && matchSt;
     }).sort((a, b) => {
       let va = '', vb = '';
       if      (sortField === 'studentName')       { va = a.studentName||''; vb = b.studentName||''; }
-      else if (sortField === 'checkInTimestamp')   { va = a.checkInTimestamp; vb = b.checkInTimestamp; }
-      else if (sortField === 'checkOutTimestamp')  { va = a.checkOutTimestamp||''; vb = b.checkOutTimestamp||''; }
-      else if (sortField === 'deptID')             { va = a.deptID; vb = b.deptID; }
-      else if (sortField === 'purpose')            { va = a.purpose; vb = b.purpose; }
+      else if (sortField === 'checkInTimestamp')  { va = a.checkInTimestamp; vb = b.checkInTimestamp; }
+      else if (sortField === 'checkOutTimestamp') { va = a.checkOutTimestamp||''; vb = b.checkOutTimestamp||''; }
+      else if (sortField === 'deptID')            { va = a.deptID; vb = b.deptID; }
+      else if (sortField === 'purpose')           { va = a.purpose; vb = b.purpose; }
       else if (sortField === 'duration') {
-        const da = a.checkOutTimestamp ? differenceInMinutes(parseISO(a.checkOutTimestamp), parseISO(a.checkInTimestamp)) : -1;
+        const da  = a.checkOutTimestamp ? differenceInMinutes(parseISO(a.checkOutTimestamp), parseISO(a.checkInTimestamp)) : -1;
         const db2 = b.checkOutTimestamp ? differenceInMinutes(parseISO(b.checkOutTimestamp), parseISO(b.checkInTimestamp)) : -1;
         return sortDir === 'asc' ? da - db2 : db2 - da;
       }
@@ -96,7 +127,7 @@ export function LogHistory() {
       const cmp = va < vb ? -1 : va > vb ? 1 : 0;
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [allLogs, search, deptFilter, statusFilter, sortField, sortDir]);
+  }, [allLogs, search, deptFilter, purposeFilter, statusFilter, sortField, sortDir]);
 
   const toggleSort = (f: SortField) => {
     if (sortField === f) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -151,20 +182,55 @@ export function LogHistory() {
             </SelectContent>
           </Select>
 
-          {/* Dept */}
+          {/* FIX: Dept — shows full name in list, only code in trigger */}
           <Select value={deptFilter} onValueChange={setDeptFilter}>
             <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl text-xs font-semibold">
-              <div className="flex items-center gap-1.5">
-                <Filter size={11} style={{ color: navy }} />
-                <SelectValue />
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <Filter size={11} style={{ color: navy, flexShrink: 0 }} />
+                <span className="truncate font-bold">
+                  {deptFilter === 'All Departments' ? 'All Colleges' : deptFilter}
+                </span>
               </div>
             </SelectTrigger>
             <SelectContent className="rounded-xl">
               <SelectItem value="All Departments" className="text-xs font-semibold">All Colleges</SelectItem>
               {depts?.sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
                 <SelectItem key={d.deptID} value={d.deptID} className="text-xs font-semibold">
-                  [{d.deptID}] {d.departmentName}
+                  <span className="font-bold mr-1" style={{ color: navy }}>[{d.deptID}]</span>
+                  {d.departmentName}
                 </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* FIX: Program filter — only visible when a dept is selected */}
+          {deptFilter !== 'All Departments' && deptPrograms.length > 0 && (
+            <Select value={programFilter} onValueChange={setProgramFilter}>
+              <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl text-xs font-semibold">
+                <span className="truncate font-bold" style={{ fontFamily: "'DM Mono',monospace", fontSize: '0.7rem' }}>
+                  {programFilter === 'All Programs' ? 'All Programs' : programFilter}
+                </span>
+              </SelectTrigger>
+              <SelectContent className="rounded-xl">
+                <SelectItem value="All Programs" className="text-xs font-semibold">All Programs</SelectItem>
+                {deptPrograms.map(p => (
+                  <SelectItem key={p.code} value={p.code} className="text-xs font-semibold">
+                    <span className="font-bold mr-1.5 font-mono" style={{ color: navy }}>{p.code}</span>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {/* FIX: Purpose — all purposes including hidden (for historical filtering) */}
+          <Select value={purposeFilter} onValueChange={setPurposeFilter}>
+            <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl text-xs font-semibold">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl">
+              {livePurposes.map(p => (
+                <SelectItem key={p} value={p} className="text-xs font-semibold">{p}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -201,9 +267,7 @@ export function LogHistory() {
                   <TableHead className={`pl-5 ${thStyle}`} onClick={() => toggleSort('studentName')}>
                     Student <SortIcon field="studentName" />
                   </TableHead>
-                  <TableHead className={thStyle} style={{ cursor: 'default' }}>
-                    Student ID
-                  </TableHead>
+                  <TableHead className={thStyle} style={{ cursor: 'default' }}>Student ID</TableHead>
                   <TableHead className={thStyle} onClick={() => toggleSort('deptID')}>
                     Dept <SortIcon field="deptID" />
                   </TableHead>
@@ -226,8 +290,8 @@ export function LogHistory() {
               </TableHeader>
               <TableBody>
                 {filtered.map(l => {
-                  const ci    = parseISO(l.checkInTimestamp);
-                  const noTap = !l.checkOutTimestamp && !isToday(ci);
+                  const ci     = parseISO(l.checkInTimestamp);
+                  const noTap  = !l.checkOutTimestamp && !isToday(ci);
                   const active = !l.checkOutTimestamp && isToday(ci);
                   return (
                     <TableRow key={l.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors" style={{ height: 60 }}>
@@ -245,7 +309,7 @@ export function LogHistory() {
                         </div>
                       </TableCell>
 
-                      {/* Student ID — formatted */}
+                      {/* Student ID */}
                       <TableCell>
                         <span className="font-mono text-xs font-bold px-2 py-1 rounded-lg"
                           style={{ background: '#f1f5f9', color: '#475569' }}>
@@ -253,9 +317,9 @@ export function LogHistory() {
                         </span>
                       </TableCell>
 
-                      {/* Dept */}
+                      {/* Dept — FIX: whitespace-nowrap so codes like CAS-STAFF don't wrap */}
                       <TableCell>
-                        <span className="font-bold text-xs px-2.5 py-1.5 rounded-lg font-mono"
+                        <span className="font-bold text-xs px-2.5 py-1.5 rounded-lg font-mono whitespace-nowrap"
                           style={{ background: `${navy}0d`, color: navy }}>
                           {l.deptID}
                         </span>
@@ -313,4 +377,4 @@ export function LogHistory() {
       </div>
     </div>
   );
-}
+} 

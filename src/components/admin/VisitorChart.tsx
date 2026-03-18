@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis, Cell } from 'recharts';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, orderBy, limit } from 'firebase/firestore';
-import { format, subDays, parseISO, startOfDay, endOfDay, isWithinInterval, eachDayOfInterval, startOfWeek } from 'date-fns';
+import { collection, query, orderBy, where } from 'firebase/firestore';
+import { format, subDays, parseISO, startOfDay, endOfDay, eachDayOfInterval } from 'date-fns';
 import { Loader2, BarChart3 } from 'lucide-react';
 import { LibraryLogRecord } from '@/lib/firebase-schema';
 
@@ -31,8 +31,19 @@ export function VisitorChart() {
   const [startDate, setStartDate] = useState(format(subDays(new Date(), 6), 'yyyy-MM-dd'));
   const [endDate,   setEndDate]   = useState(format(new Date(), 'yyyy-MM-dd'));
 
-  const logsQuery = useMemoFirebase(() =>
-    query(collection(db, 'library_logs'), orderBy('checkInTimestamp', 'desc'), limit(2000)), [db]);
+  // FIX: Filter at Firestore level using date range — no more orderBy+limit(2000)+client filter
+  const startISO = useMemo(() => startOfDay(parseISO(startDate)).toISOString(), [startDate]);
+  const endISO   = useMemo(() => endOfDay(parseISO(endDate)).toISOString(),   [endDate]);
+
+  const logsQuery = useMemoFirebase(
+    () => query(
+      collection(db, 'library_logs'),
+      where('checkInTimestamp', '>=', startISO),
+      where('checkInTimestamp', '<=', endISO),
+      orderBy('checkInTimestamp', 'asc')
+    ),
+    [db, startISO, endISO]
+  );
   const { data: logs, isLoading } = useCollection<LibraryLogRecord>(logsQuery);
 
   const applyPreset = (days: number) => {
@@ -42,15 +53,17 @@ export function VisitorChart() {
   };
 
   const chartData = useMemo(() => {
-    if (!logs) return [];
     const start = startOfDay(parseISO(startDate));
     const end   = endOfDay(parseISO(endDate));
     const days  = eachDayOfInterval({ start, end });
     const stats: Record<string, number> = {};
+    // Exclude Sundays
     days.forEach(d => { if (format(d, 'EEE') !== 'Sun') stats[format(d, 'MMM dd')] = 0; });
-    logs.forEach(log => {
+
+    // Logs are already filtered by Firestore — just bucket them by day
+    (logs ?? []).forEach(log => {
       const d = parseISO(log.checkInTimestamp);
-      if (isWithinInterval(d, { start, end }) && format(d, 'EEE') !== 'Sun') {
+      if (format(d, 'EEE') !== 'Sun') {
         const key = format(d, 'MMM dd');
         if (key in stats) stats[key]++;
       }
@@ -59,7 +72,7 @@ export function VisitorChart() {
   }, [logs, startDate, endDate]);
 
   const totalVisits = chartData.reduce((s, d) => s + d.visits, 0);
-  const peakDay = chartData.reduce((a, b) => b.visits > a.visits ? b : a, { name: '—', visits: 0 });
+  const peakDay     = chartData.reduce((a, b) => b.visits > a.visits ? b : a, { name: '—', visits: 0 });
 
   return (
     <div style={card}>
@@ -123,8 +136,10 @@ export function VisitorChart() {
               <ChartTooltip content={<ChartTooltipContent hideLabel />} />
               <Bar dataKey="visits" radius={[5, 5, 0, 0]} barSize={24}>
                 {chartData.map((e, i) => (
-                  <Cell key={i} fill={e.visits > 0 ? 'hsl(221,72%,22%)' : 'hsl(220,20%,92%)'}
-                    opacity={e.visits === peakDay.visits && e.visits > 0 ? 1 : e.visits > 0 ? 0.7 : 1} />
+                  <Cell key={i}
+                    fill={e.visits > 0 ? 'hsl(221,72%,22%)' : 'hsl(220,20%,92%)'}
+                    opacity={e.visits === peakDay.visits && e.visits > 0 ? 1 : e.visits > 0 ? 0.7 : 1}
+                  />
                 ))}
               </Bar>
             </BarChart>
@@ -135,11 +150,11 @@ export function VisitorChart() {
       {/* Summary stats */}
       <div className="px-4 pb-4 pt-1 flex items-center gap-6 border-t border-slate-50">
         <div>
-          <p className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.5rem' }}>{totalVisits}</p>
+          <p className="font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.5rem' }}>{totalVisits}</p>
           <p className="font-semibold text-slate-400" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total Visits</p>
         </div>
         <div>
-          <p className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.5rem' }}>{peakDay.visits}</p>
+          <p className="font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif", fontSize: '1.5rem' }}>{peakDay.visits}</p>
           <p className="font-semibold text-slate-400" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Peak Day</p>
         </div>
         <div className="ml-auto">

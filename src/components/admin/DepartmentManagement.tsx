@@ -5,14 +5,14 @@ import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   Building2, Plus, Trash2, Loader2, Search, DatabaseBackup,
-  ChevronRight, ChevronDown, GraduationCap, X, Edit2, Check, Save,
+  ChevronRight, ChevronDown, GraduationCap, X, Edit2, Check,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import {
   useFirestore, useCollection, useMemoFirebase,
   setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking,
 } from '@/firebase';
-import { setDoc, collection, doc, query, where } from 'firebase/firestore';
+import { setDoc, collection, doc } from 'firebase/firestore';
 import {
   DepartmentRecord, ProgramRecord, DEPARTMENTS, getProgramSeedData,
 } from '@/lib/firebase-schema';
@@ -27,22 +27,19 @@ const card: React.CSSProperties = {
 };
 
 export function DepartmentManagement() {
-  // Dept form state
   const [newDeptId,    setNewDeptId]    = useState('');
   const [newDeptName,  setNewDeptName]  = useState('');
   const [searchTerm,   setSearchTerm]   = useState('');
   const [isSeeding,    setIsSeeding]    = useState(false);
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
 
-  // Program add form state (per dept)
   const [newProgName, setNewProgName] = useState('');
   const [newProgCode, setNewProgCode] = useState('');
 
-  // Program edit state
-  const [editingProgId,   setEditingProgId]   = useState<string | null>(null);
-  const [editProgName,    setEditProgName]     = useState('');
-  const [editProgCode,    setEditProgCode]     = useState('');
-  // ── Confirmation modal state ─────────────────────────────────────────────
+  const [editingProgId, setEditingProgId] = useState<string | null>(null);
+  const [editProgName,  setEditProgName]  = useState('');
+  const [editProgCode,  setEditProgCode]  = useState('');
+
   const [confirmModal, setConfirmModal] = useState<{
     open: boolean; type: 'dept' | 'program'; id: string; name: string;
   } | null>(null);
@@ -50,14 +47,12 @@ export function DepartmentManagement() {
   const { toast } = useToast();
   const db = useFirestore();
 
-  // ── Firestore collections ──
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts, isLoading: isDepsLoading } = useCollection<DepartmentRecord>(deptRef);
 
   const programsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
   const { data: allPrograms, isLoading: isProgsLoading } = useCollection<ProgramRecord>(programsRef);
 
-  // Programs for currently expanded dept
   const deptPrograms = useMemo(() => {
     if (!allPrograms || !expandedDept) return [];
     return allPrograms
@@ -65,7 +60,6 @@ export function DepartmentManagement() {
       .sort((a, b) => a.code.localeCompare(b.code));
   }, [allPrograms, expandedDept]);
 
-  // ── Department CRUD ──
   const handleAddDept = () => {
     if (!newDeptId.trim() || !newDeptName.trim()) {
       toast({ title: "Required", description: "Code and name are required.", variant: "destructive" }); return;
@@ -110,7 +104,6 @@ export function DepartmentManagement() {
       const seed = getProgramSeedData();
       let count = 0;
       for (const prog of seed) {
-        // Use code as the document ID so it's human-readable in Firestore
         const docId = `${prog.deptID}_${prog.code}`;
         await setDoc(doc(db, 'programs', docId), prog, { merge: true });
         count++;
@@ -121,27 +114,21 @@ export function DepartmentManagement() {
     } finally { setIsSeeding(false); }
   };
 
-  // ── Program CRUD ──
   const handleAddProgram = async () => {
     if (!expandedDept || !newProgName.trim() || !newProgCode.trim()) {
       toast({ title: "Required", description: "Program name and code are required.", variant: "destructive" }); return;
     }
-    // Check for duplicate code within dept
     const duplicate = deptPrograms.find(p => p.code.toLowerCase() === newProgCode.trim().toLowerCase());
     if (duplicate) {
       toast({ title: "Duplicate Code", description: `Code "${newProgCode.trim().toUpperCase()}" already exists in this department.`, variant: "destructive" }); return;
     }
     try {
-      const code = newProgCode.trim().toUpperCase();
+      const code  = newProgCode.trim().toUpperCase();
       const docId = `${expandedDept}_${code}`;
-      await setDoc(doc(db, 'programs', docId), {
-        deptID: expandedDept,
-        name:   newProgName.trim(),
-        code,
-      }, { merge: false });
+      await setDoc(doc(db, 'programs', docId), { deptID: expandedDept, name: newProgName.trim(), code }, { merge: false });
       setNewProgName(''); setNewProgCode('');
       toast({ title: "Program Added", description: `${code} — ${newProgName.trim()}` });
-    } catch (e) {
+    } catch {
       toast({ title: "Failed to add program", variant: "destructive" });
     }
   };
@@ -166,8 +153,6 @@ export function DepartmentManagement() {
     toast({ title: "Program Updated" });
   };
 
-  const cancelEdit = () => setEditingProgId(null);
-
   const filteredDepts = (depts || [])
     .filter(d =>
       d.deptID.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -180,7 +165,7 @@ export function DepartmentManagement() {
   return (
     <div className="space-y-4" style={{ fontFamily: "'DM Sans',sans-serif" }}>
 
-      {/* ── Top Controls Card ── */}
+      {/* Top Controls Card */}
       <div style={card} className="p-4 sm:p-5 space-y-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex items-center gap-2.5">
@@ -236,12 +221,12 @@ export function DepartmentManagement() {
         </div>
       </div>
 
-      {/* ── Department Table ── */}
+      {/* Department Table */}
       <div style={card} className="overflow-hidden">
         <Table>
           <TableHeader>
             <TableRow className="h-11 border-slate-100">
-              <TableHead className={`pl-4 w-24 ${thStyle}`}>Code</TableHead>
+              <TableHead className={`pl-4 w-28 ${thStyle}`}>Code</TableHead>
               <TableHead className={thStyle}>Department</TableHead>
               <TableHead className={`text-center w-28 ${thStyle}`}>Programs</TableHead>
               <TableHead className={`text-right pr-4 w-14 ${thStyle}`}></TableHead>
@@ -262,18 +247,19 @@ export function DepartmentManagement() {
               </TableRow>
             ) : (
               filteredDepts.flatMap(d => {
-                const progCount = allPrograms?.filter(p => p.deptID === d.deptID).length ?? 0;
+                const progCount  = allPrograms?.filter(p => p.deptID === d.deptID).length ?? 0;
                 const isExpanded = expandedDept === d.deptID;
 
                 return [
-                  /* ── Dept row ── */
+                  /* Dept row */
                   <TableRow key={d.deptID}
                     className="border-b border-slate-50 h-14 transition-colors cursor-pointer"
                     style={{ background: isExpanded ? `${navy}04` : undefined }}
                     onClick={() => setExpandedDept(isExpanded ? null : d.deptID)}>
 
                     <TableCell className="pl-4">
-                      <span className="font-bold text-sm px-2.5 py-1.5 rounded-lg"
+                      {/* FIX: whitespace-nowrap so CAS-STAFF never breaks to a second line */}
+                      <span className="font-bold text-sm px-2.5 py-1.5 rounded-lg whitespace-nowrap inline-block"
                         style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
                         {d.deptID}
                       </span>
@@ -303,13 +289,12 @@ export function DepartmentManagement() {
                     </TableCell>
                   </TableRow>,
 
-                  /* ── Expanded programs panel ── */
+                  /* Expanded programs panel */
                   ...(isExpanded ? [
                     <TableRow key={`${d.deptID}-panel`} className="border-b border-slate-100">
                       <TableCell colSpan={4} className="p-0">
                         <div className="p-4 sm:p-5" style={{ background: `${navy}03` }}>
 
-                          {/* Panel header */}
                           <div className="flex items-center justify-between mb-4">
                             <div className="flex items-center gap-2.5">
                               <GraduationCap size={16} style={{ color: navy }} />
@@ -371,7 +356,8 @@ export function DepartmentManagement() {
                               <table className="w-full">
                                 <thead>
                                   <tr className="bg-slate-50 border-b border-slate-100">
-                                    <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-400 uppercase tracking-wide w-28">Code</th>
+                                    {/* FIX: min-w ensures code column is wide enough for long codes */}
+                                    <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-400 uppercase tracking-wide" style={{ minWidth: '120px' }}>Code</th>
                                     <th className="text-left px-4 py-2.5 text-xs font-bold text-slate-400 uppercase tracking-wide">Program Name</th>
                                     <th className="text-right px-4 py-2.5 text-xs font-bold text-slate-400 uppercase tracking-wide w-24">Actions</th>
                                   </tr>
@@ -382,12 +368,13 @@ export function DepartmentManagement() {
                                       <td className="px-4 py-3">
                                         {editingProgId === prog.id ? (
                                           <Input value={editProgCode} onChange={e => setEditProgCode(e.target.value.toUpperCase())}
-                                            className="h-8 w-24 text-sm font-bold border-slate-200 rounded-lg"
+                                            className="h-8 w-28 text-sm font-bold border-slate-200 rounded-lg"
                                             style={{ fontFamily: "'DM Mono',monospace" }}
                                             autoFocus
                                           />
                                         ) : (
-                                          <span className="font-bold text-sm px-2.5 py-1.5 rounded-lg"
+                                          /* FIX: whitespace-nowrap — badge grows horizontally, never wraps */
+                                          <span className="font-bold text-sm px-2.5 py-1.5 rounded-lg whitespace-nowrap inline-block"
                                             style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
                                             {prog.code}
                                           </span>
@@ -412,7 +399,7 @@ export function DepartmentManagement() {
                                                 style={{ background: navy }}>
                                                 <Check size={14} />
                                               </button>
-                                              <button onClick={cancelEdit}
+                                              <button onClick={() => setEditingProgId(null)}
                                                 className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 active:scale-95 transition-all">
                                                 <X size={14} />
                                               </button>
@@ -447,7 +434,8 @@ export function DepartmentManagement() {
           </TableBody>
         </Table>
       </div>
-      {/* ── Confirmation Modal ── */}
+
+      {/* Confirmation Modal */}
       {confirmModal?.open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(8px)', animation: 'fadeIn 0.2s ease-out' }}>

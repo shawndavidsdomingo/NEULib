@@ -5,10 +5,11 @@ import { isToday, isThisWeek, parseISO } from 'date-fns';
 import { Users, Calendar, TrendingUp, Sparkles, Loader2, Filter, X } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query } from 'firebase/firestore';
-import { LibraryLogRecord, UserRecord, DEPARTMENTS } from '@/lib/firebase-schema';
+import { LibraryLogRecord, UserRecord } from '@/lib/firebase-schema';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-const PURPOSES = ['Reading Books', 'Research', 'Computer Use', 'Assignments'];
+interface VisitPurpose { id: string; label: string; active: boolean; }
+
 const VISITOR_TYPES = [
   { value: 'all',     label: 'All Visitors' },
   { value: 'student', label: 'Students' },
@@ -18,20 +19,28 @@ const VISITOR_TYPES = [
 export function StatsCards() {
   const db = useFirestore();
 
-  // Filters
   const [purposeFilter, setPurposeFilter] = useState('all');
   const [deptFilter,    setDeptFilter]    = useState('all');
   const [typeFilter,    setTypeFilter]    = useState('all');
 
-  const logsRef  = useMemoFirebase(() => collection(db, 'library_logs'), [db]);
-  const usersRef = useMemoFirebase(() => query(collection(db, 'users')), [db]);
-  const deptRef  = useMemoFirebase(() => collection(db, 'departments'), [db]);
+  const logsRef     = useMemoFirebase(() => collection(db, 'library_logs'), [db]);
+  const usersRef    = useMemoFirebase(() => query(collection(db, 'users')), [db]);
+  const deptRef     = useMemoFirebase(() => collection(db, 'departments'), [db]);
+  // FIX: Load all purposes dynamically from Firestore (not a hardcoded array)
+  // Admin analytics show ALL purposes including hidden ones
+  const purposesRef = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
 
-  const { data: logs,   isLoading: logsLoading  } = useCollection<LibraryLogRecord>(logsRef);
-  const { data: users                            } = useCollection<UserRecord>(usersRef);
-  const { data: depts                            } = useCollection<{ deptID: string; departmentName: string }>(deptRef);
+  const { data: logs,     isLoading: logsLoading } = useCollection<LibraryLogRecord>(logsRef);
+  const { data: users                             } = useCollection<UserRecord>(usersRef);
+  const { data: depts                             } = useCollection<{ deptID: string; departmentName: string }>(deptRef);
+  const { data: purposeDocs                       } = useCollection<VisitPurpose>(purposesRef);
 
-  // Build a map of userId → user for visitor-type filtering
+  // FIX: Build purpose list dynamically from Firestore — all purposes, including hidden
+  const allPurposeLabels = useMemo(() => {
+    if (!purposeDocs || purposeDocs.length === 0) return [];
+    return [...purposeDocs].sort((a, b) => a.label.localeCompare(b.label)).map(p => p.label);
+  }, [purposeDocs]);
+
   const userMap = useMemo(() => {
     const m: Record<string, UserRecord> = {};
     (users || []).forEach(u => { m[u.id] = u; });
@@ -89,27 +98,33 @@ export function StatsCards() {
           <Filter size={12} /> Filter Stats
         </div>
 
-        {/* Purpose */}
+        {/* FIX: Purpose dropdown now reads from Firestore dynamically */}
         <Select value={purposeFilter} onValueChange={setPurposeFilter}>
           <SelectTrigger className="h-8 w-36 bg-white rounded-xl border-slate-200 font-semibold text-xs">
             <SelectValue placeholder="Purpose" />
           </SelectTrigger>
           <SelectContent className="rounded-xl">
             <SelectItem value="all" className="text-xs font-semibold">All Purposes</SelectItem>
-            {PURPOSES.map(p => <SelectItem key={p} value={p} className="text-xs font-semibold">{p}</SelectItem>)}
+            {allPurposeLabels.map(p => (
+              <SelectItem key={p} value={p} className="text-xs font-semibold">{p}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
-        {/* Department */}
+        {/* FIX: Dept dropdown shows full name in list, but only code after selection */}
         <Select value={deptFilter} onValueChange={setDeptFilter}>
           <SelectTrigger className="h-8 w-36 bg-white rounded-xl border-slate-200 font-semibold text-xs">
-            <SelectValue placeholder="Department" />
+            {/* Show only the code (deptID) in the trigger after selection */}
+            <span className="truncate font-bold text-xs">
+              {deptFilter === 'all' ? 'All Colleges' : deptFilter}
+            </span>
           </SelectTrigger>
           <SelectContent className="rounded-xl">
             <SelectItem value="all" className="text-xs font-semibold">All Colleges</SelectItem>
             {(depts || []).sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
               <SelectItem key={d.deptID} value={d.deptID} className="text-xs font-semibold">
-                [{d.deptID}] {d.departmentName}
+                <span className="font-bold mr-1" style={{ color: 'hsl(221,72%,22%)' }}>[{d.deptID}]</span>
+                {d.departmentName}
               </SelectItem>
             ))}
           </SelectContent>

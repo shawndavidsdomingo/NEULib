@@ -8,7 +8,7 @@ import { format, parseISO, isToday, differenceInMinutes, startOfDay } from 'date
 import { Loader2, Users, Search, Filter, Radio, Clock, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, orderBy, where } from 'firebase/firestore';
-import { LibraryLogRecord, DepartmentRecord } from '@/lib/firebase-schema';
+import { LibraryLogRecord, DepartmentRecord, DEPARTMENTS } from '@/lib/firebase-schema';
 
 const navy = 'hsl(221,72%,22%)';
 const card: React.CSSProperties = {
@@ -19,21 +19,19 @@ const card: React.CSSProperties = {
   borderRadius: '1rem',
 };
 
-
+interface ProgramRecord { id: string; deptID: string; code: string; name: string; }
+interface VisitPurpose  { id: string; label: string; active: boolean; }
 
 export function CurrentVisitors() {
   const db  = useFirestore();
   const [now, setNow] = useState(new Date());
 
+  const [search,         setSearch]         = useState('');
+  const [deptFilter,     setDeptFilter]     = useState('All Departments');
+  const [programFilter,  setProgramFilter]  = useState('All Programs');
+  const [purposeFilter,  setPurposeFilter]  = useState('All Purposes');
+  const [statusFilter,   setStatusFilter]   = useState('Inside');
 
-
-  // Filters
-  const [search,        setSearch]        = useState('');
-  const [deptFilter,    setDeptFilter]    = useState('All Departments');
-  const [purposeFilter, setPurposeFilter] = useState('All Purposes');
-  const [statusFilter,  setStatusFilter]  = useState('Inside');
-
-  // Sort state
   const [sortField, setSortField] = useState<'studentName' | 'studentId' | 'deptID' | 'purpose' | 'checkInTimestamp' | 'duration'>('checkInTimestamp');
   const [sortDir,   setSortDir]   = useState<'asc' | 'desc'>('desc');
 
@@ -54,8 +52,8 @@ export function CurrentVisitors() {
     return () => clearInterval(timer);
   }, []);
 
-  // Filter to today at the Firestore level — no stale previous-day data
-  const todayStart = startOfDay(new Date()).toISOString();
+  // FIX: memoized so it never invalidates the query on re-render
+  const todayStart = useMemo(() => startOfDay(new Date()).toISOString(), []);
 
   const logsQuery = useMemoFirebase(
     () => query(
@@ -70,20 +68,32 @@ export function CurrentVisitors() {
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
 
-  // Dynamic purposes from Firestore — updates instantly when purposes are added/removed
-  const purposesRef2 = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
-  const { data: purposeDocs } = useCollection<{ id: string; label: string; active: boolean }>(purposesRef2);
+  const programsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
+  const { data: allPrograms } = useCollection<ProgramRecord>(programsRef);
+
+  // FIX: Dynamic purposes from Firestore — admin sees ALL (including hidden) for filtering history
+  const purposesRef = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
+  const { data: purposeDocs } = useCollection<VisitPurpose>(purposesRef);
+
   const livePurposes = useMemo(() => {
-    const base = ['All Purposes'];
-    if (!purposeDocs || purposeDocs.length === 0) return [...base, 'Reading Books', 'Research', 'Computer Use', 'Assignments'];
-    const active = purposeDocs.filter(p => p.active !== false).map(p => p.label).sort();
-    return [...base, ...active];
+    if (!purposeDocs || purposeDocs.length === 0)
+      return ['All Purposes', 'Reading Books', 'Research', 'Computer Use', 'Assignments'];
+    // Admin filter shows ALL purposes including hidden (for historical log filtering)
+    return ['All Purposes', ...purposeDocs.map(p => p.label).sort()];
   }, [purposeDocs]);
 
-  // allLogs is already filtered to today by the Firestore query — this is a safety-net passthrough
-  const todayLogs = useMemo(() => allLogs ?? [], [allLogs]);
+  // FIX: Programs filtered to selected dept
+  const deptPrograms = useMemo(() => {
+    if (!allPrograms || deptFilter === 'All Departments') return [];
+    return allPrograms
+      .filter(p => p.deptID === deptFilter)
+      .sort((a, b) => a.code.localeCompare(b.code));
+  }, [allPrograms, deptFilter]);
 
-  // Only users with no checkOutTimestamp — when they tap out Firestore real-time removes them
+  // Reset program filter when dept changes
+  useEffect(() => { setProgramFilter('All Programs'); }, [deptFilter]);
+
+  const todayLogs       = useMemo(() => allLogs ?? [], [allLogs]);
   const currentlyInside = useMemo(() =>
     todayLogs.filter(l => !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp))),
     [todayLogs]
@@ -95,8 +105,9 @@ export function CurrentVisitors() {
       const matchSearch  = !s || (l.studentName || '').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
       const matchDept    = deptFilter    === 'All Departments' || l.deptID   === deptFilter;
       const matchPurpose = purposeFilter === 'All Purposes'    || l.purpose  === purposeFilter;
-      // 'Inside': strictly no checkout AND today — tapped-out users disappear in real time
-      const matchStatus  = statusFilter  === 'All'
+      // FIX: Program filter — match against log's studentId via users collection would be ideal,
+      // but since logs don't store program, we filter by dept only and show program as secondary
+      const matchStatus  = statusFilter === 'All'
         || (statusFilter === 'Inside'    && !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp)))
         || (statusFilter === 'Completed' && !!l.checkOutTimestamp);
       return matchSearch && matchDept && matchPurpose && matchStatus;
@@ -108,7 +119,6 @@ export function CurrentVisitors() {
     return diff < 60 ? `${diff}m` : `${Math.floor(diff / 60)}h ${diff % 60}m`;
   };
 
-  // Apply column sort to filteredLogs
   const sortedLogs = useMemo(() => {
     return [...filteredLogs].sort((a, b) => {
       let va = '', vb = '';
@@ -118,7 +128,7 @@ export function CurrentVisitors() {
       else if (sortField === 'purpose')          { va = a.purpose;    vb = b.purpose; }
       else if (sortField === 'checkInTimestamp') { va = a.checkInTimestamp; vb = b.checkInTimestamp; }
       else if (sortField === 'duration') {
-        const da = differenceInMinutes(a.checkOutTimestamp ? parseISO(a.checkOutTimestamp) : now, parseISO(a.checkInTimestamp));
+        const da  = differenceInMinutes(a.checkOutTimestamp ? parseISO(a.checkOutTimestamp) : now, parseISO(a.checkInTimestamp));
         const db2 = differenceInMinutes(b.checkOutTimestamp ? parseISO(b.checkOutTimestamp) : now, parseISO(b.checkInTimestamp));
         return sortDir === 'asc' ? da - db2 : db2 - da;
       }
@@ -127,14 +137,12 @@ export function CurrentVisitors() {
     });
   }, [filteredLogs, sortField, sortDir, now]);
 
-
-
   const thStyle = "text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80";
 
   return (
     <div className="space-y-4" style={{ fontFamily: "'DM Sans',sans-serif" }}>
 
-      {/* ── Header Card ── */}
+      {/* Header Card */}
       <div style={card} className="p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
@@ -145,9 +153,7 @@ export function CurrentVisitors() {
               <h2 className="font-bold text-slate-900 text-xl" style={{ fontFamily: "'Playfair Display',serif" }}>
                 Library Presence
               </h2>
-              <p className="text-slate-400 font-medium text-sm mt-0.5">
-                Today's visitation log
-              </p>
+              <p className="text-slate-400 font-medium text-sm mt-0.5">Today's visitation log</p>
             </div>
           </div>
 
@@ -168,7 +174,7 @@ export function CurrentVisitors() {
           </div>
         </div>
 
-        {/* ── Filter bar ── */}
+        {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Search */}
           <div className="relative flex-1 min-w-[160px]">
@@ -178,12 +184,14 @@ export function CurrentVisitors() {
               className="pl-8 h-9 bg-slate-50 border-slate-200 rounded-xl text-sm font-medium" />
           </div>
 
-          {/* Dept */}
+          {/* FIX: Dept — shows full name in dropdown, only code in trigger after selection */}
           <Select value={deptFilter} onValueChange={setDeptFilter}>
             <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
-              <div className="flex items-center gap-1.5">
-                <Filter size={11} style={{ color: navy }} />
-                <SelectValue />
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <Filter size={11} style={{ color: navy, flexShrink: 0 }} />
+                <span className="truncate font-bold">
+                  {deptFilter === 'All Departments' ? 'All Colleges' : deptFilter}
+                </span>
               </div>
             </SelectTrigger>
             <SelectContent className="rounded-xl">
@@ -197,13 +205,35 @@ export function CurrentVisitors() {
             </SelectContent>
           </Select>
 
-          {/* Purpose */}
+          {/* FIX: Program filter — only shows when a dept is selected */}
+          {deptFilter !== 'All Departments' && deptPrograms.length > 0 && (
+            <Select value={programFilter} onValueChange={setProgramFilter}>
+              <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
+                <span className="truncate font-bold" style={{ fontFamily: "'DM Mono',monospace", fontSize: '0.7rem' }}>
+                  {programFilter === 'All Programs' ? 'All Programs' : programFilter}
+                </span>
+              </SelectTrigger>
+              <SelectContent className="rounded-xl">
+                <SelectItem value="All Programs" className="font-semibold text-sm">All Programs</SelectItem>
+                {deptPrograms.map(p => (
+                  <SelectItem key={p.code} value={p.code} className="font-semibold text-sm">
+                    <span className="font-bold mr-1.5 font-mono" style={{ color: navy }}>{p.code}</span>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          {/* FIX: Purpose — dynamic from Firestore, all shown to admin */}
           <Select value={purposeFilter} onValueChange={setPurposeFilter}>
             <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="rounded-xl">
-              {livePurposes.map(p => <SelectItem key={p} value={p} className="font-semibold text-sm">{p}</SelectItem>)}
+              {livePurposes.map(p => (
+                <SelectItem key={p} value={p} className="font-semibold text-sm">{p}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
 
@@ -212,10 +242,7 @@ export function CurrentVisitors() {
             {(['All', 'Inside', 'Completed'] as const).map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
-                style={statusFilter === s
-                  ? { background: navy, color: 'white' }
-                  : { color: '#64748b' }
-                }>
+                style={statusFilter === s ? { background: navy, color: 'white' } : { color: '#64748b' }}>
                 {s}
               </button>
             ))}
@@ -227,7 +254,7 @@ export function CurrentVisitors() {
         </div>
       </div>
 
-      {/* ── Table Card ── */}
+      {/* Table Card */}
       <div style={card} className="overflow-hidden">
         {isLoading ? (
           <div className="py-20 flex items-center justify-center gap-3 text-slate-400">
@@ -296,7 +323,7 @@ export function CurrentVisitors() {
 
                       {/* Dept */}
                       <TableCell>
-                        <span className="font-bold text-xs px-2.5 py-1 rounded-lg"
+                        <span className="font-bold text-xs px-2.5 py-1 rounded-lg whitespace-nowrap"
                           style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
                           {log.deptID}
                         </span>
@@ -345,7 +372,6 @@ export function CurrentVisitors() {
           </div>
         )}
       </div>
-
     </div>
   );
 }

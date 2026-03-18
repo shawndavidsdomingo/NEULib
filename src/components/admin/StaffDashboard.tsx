@@ -9,12 +9,11 @@ import { ReportModule } from './ReportModule';
 import { VisitorChart } from './VisitorChart';
 import { AnalyticsBreakdown } from './AnalyticsBreakdown';
 import { CurrentVisitors } from './CurrentVisitors';
-import { NoTapWidget } from './NoTapWidget';
 import { LiveFeed } from './LiveFeed';
-import { MissedTapOutTab } from './MissedTapOutTab';
+import { LogHistory } from './LogHistory';
 import {
   Users, LayoutDashboard, FileText, Activity,
-  LogOut, MapPin, Clock, Scan, AlertTriangle, Menu, X as XIcon,
+  LogOut, MapPin, Clock, Scan, Menu, X as XIcon, History,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { UserRecord } from '@/lib/firebase-schema';
@@ -57,8 +56,8 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
   const navItems = [
     { id: 'overview', label: 'Overview',        icon: LayoutDashboard },
     { id: 'presence', label: 'Live Presence',   icon: MapPin },
-    { id: 'traffic',  label: 'Live Traffic',    icon: Activity },
-    { id: 'missed',   label: 'Missed Tap-Outs', icon: AlertTriangle },
+    { id: 'traffic',  label: 'Live Presence',    icon: Activity },
+    { id: 'history', label: 'Log History', icon: History },
     { id: 'users',    label: 'Registry',        icon: Users },
     { id: 'temp',     label: 'Pending',         icon: Clock },
     { id: 'reports',  label: 'Reports',         icon: FileText },
@@ -76,8 +75,8 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
       title: '📊 Monitoring & Real-Time Data',
       items: [
         { id: 'presence', label: 'Live Presence',   icon: MapPin },
-        { id: 'traffic',  label: 'Live Traffic',    icon: Activity },
-        { id: 'missed',   label: 'Missed Tap-Outs', icon: AlertTriangle },
+        { id: 'traffic',  label: 'Live Presence',    icon: Activity },
+        { id: 'history', label: 'Log History', icon: History },
       ],
     },
     {
@@ -107,7 +106,6 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-start">
             <div className="lg:col-span-2"><LiveFeed /></div>
             <div className="lg:col-span-1 flex flex-col gap-4">
-              <NoTapWidget />
               <Card className="school-card overflow-visible">
                 <CardHeader className="px-4 py-3 border-b border-slate-100">
                   <CardTitle className="text-lg font-bold text-slate-800" style={{ fontFamily: "'Playfair Display',serif" }}>Quick Actions</CardTitle>
@@ -117,7 +115,7 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
                     {([
                       { icon: Users,    label: 'Registry',      id: 'users',    color: navy },
                       { icon: MapPin,   label: 'Live Presence', id: 'presence', color: '#059669' },
-                      { icon: Activity, label: 'Live Traffic',  id: 'traffic',  color: '#0891b2' },
+                      { icon: Activity, label: 'Live Presence',  id: 'traffic',  color: '#0891b2' },
                       { icon: FileText, label: 'Reports',       id: 'reports',  color: '#d97706' },
                       { icon: Clock,    label: 'Pending',       id: 'temp',     color: '#7c3aed' },
                       { icon: Scan,     label: 'Kiosk',         id: 'kiosk',    color: '#64748b' },
@@ -146,11 +144,11 @@ export default function StaffDashboard({ onExit, adminData, user, onSwitchToStud
         </div>
       );
       case 'presence': return <CurrentVisitors />;
-      case 'traffic':  return <LiveFeed />;
+      case 'traffic': return <CurrentVisitors />;
       case 'users':    return <UserManagement isSuperAdmin={false} />;
       case 'temp':     return <TemporaryVisitorManagement isSuperAdmin={false} />;
       case 'reports':  return <ReportModule isSuperAdmin={false} />;
-      case 'missed':   return <MissedTapOutTab />;
+      case 'history': return <LogHistory />;
       default:         return null;
     }
   };

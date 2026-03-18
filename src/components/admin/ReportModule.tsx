@@ -56,8 +56,9 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
   const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
   const [filtersOpen,   setFiltersOpen]   = useState(true);
   const [topVisitorsOpen,  setTopVisitorsOpen]  = useState(true);
+  const [tapOutFilter,  setTapOutFilter]  = useState<'all' | 'no_tap' | 'with_timeout'>('all');
   const [archiveSearch,    setArchiveSearch]    = useState('');
-  const [archiveSortField, setArchiveSortField] = useState<'checkInTimestamp' | 'studentName' | 'deptID' | 'purpose' | 'duration'>('checkInTimestamp');
+  const [archiveSortField, setArchiveSortField] = useState<'checkInTimestamp' | 'studentName' | 'deptID' | 'purpose' | 'duration' | 'studentId' | 'checkOutTimestamp' | 'program'>('checkInTimestamp');
   const [archiveSortOrder, setArchiveSortOrder] = useState<'asc' | 'desc'>('desc');
 
   const { toast } = useToast();
@@ -98,12 +99,15 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       const inRange   = (isAfter(v, s) || v.getTime() === s.getTime()) && (isBefore(v, e) || v.getTime() === e.getTime());
       const inDept    = deptFilter    === 'All Departments' || l.deptID   === deptFilter;
       const inPurpose = purposeFilter === 'All Purposes'    || l.purpose  === purposeFilter;
+      const inTapOut = tapOutFilter === 'all'
+        || (tapOutFilter === 'with_timeout' && !!l.checkOutTimestamp)
+        || (tapOutFilter === 'no_tap'       && !l.checkOutTimestamp && !isToday(parseISO(l.checkInTimestamp)));
       // Program filter is based on code — since logs don't store program,
       // we skip program filtering at log level (filter is for export context display)
       const inProgram = true; // program shown in filter label only
       return inRange && inDept && inPurpose;
     }).sort((a, b) => b.checkInTimestamp.localeCompare(a.checkInTimestamp)),
-    [allLogs, startDate, endDate, deptFilter, purposeFilter]
+    [allLogs, startDate, endDate, deptFilter, purposeFilter, programFilter, tapOutFilter]
   );
 
   const displayedLogs = useMemo(() => {
@@ -169,11 +173,68 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
     if (field === 'start') setStartDate(v); else setEndDate(v);
   };
 
+  // ── Statistical fallback — computed entirely client-side ──────────────────
+  const buildStatisticalSummary = () => {
+    const logs = filteredLogs;
+    if (!logs.length) return '⚠️ No data available for the selected period.';
+
+    // Peak hour
+    const hourCounts: Record<number, number> = {};
+    logs.forEach(l => {
+      const h = parseISO(l.checkInTimestamp).getHours();
+      hourCounts[h] = (hourCounts[h] || 0) + 1;
+    });
+    const peakHour = Object.entries(hourCounts).sort((a, b) => +b[1] - +a[1])[0];
+    const peakHourNum = peakHour ? parseInt(peakHour[0]) : 0;
+    const peakLabel   = peakHour
+      ? `${String(peakHourNum).padStart(2,'0')}:00 (${peakHourNum < 12 ? 'morning' : peakHourNum < 17 ? 'afternoon' : 'evening'}) with ${peakHour[1]} visit${+peakHour[1] > 1 ? 's' : ''}`
+      : '—';
+
+    // Purpose counts
+    const purposeCounts: Record<string, number> = {};
+    logs.forEach(l => { const p = l.purpose || 'Unknown'; purposeCounts[p] = (purposeCounts[p] || 0) + 1; });
+    const topPurpose   = Object.entries(purposeCounts).sort((a, b) => b[1] - a[1])[0];
+    const purposeCount = Object.keys(purposeCounts).length;
+
+    // Dept counts
+    const deptCounts: Record<string, number> = {};
+    logs.forEach(l => { const d = deptNameMap[l.deptID] || l.deptID; deptCounts[d] = (deptCounts[d] || 0) + 1; });
+    const topDept  = Object.entries(deptCounts).sort((a, b) => b[1] - a[1])[0];
+    const deptCount = Object.keys(deptCounts).length;
+
+    // Avg duration
+    const completed = logs.filter(l => l.checkOutTimestamp);
+    const avgMins = completed.length
+      ? Math.round(completed.reduce((s, l) => s + differenceInMinutes(parseISO(l.checkOutTimestamp!), parseISO(l.checkInTimestamp)), 0) / completed.length)
+      : null;
+    const avgDurStr = avgMins !== null
+      ? (avgMins >= 60 ? `${Math.floor(avgMins/60)}h ${avgMins%60}m` : `${avgMins}m`)
+      : 'N/A';
+
+    // Unique students
+    const uniqueStudents = new Set(logs.map(l => l.studentId)).size;
+
+    return [
+      `📊 STATISTICAL SUMMARY (AI models unavailable)`,
+      ``,
+      `Based on ${logs.length} visit${logs.length !== 1 ? 's' : ''} analyzed from ${startDate} to ${endDate}:`,
+      ``,
+      `• Peak Activity: ${peakLabel}`,
+      `• Most Common Purpose: "${topPurpose?.[0] || '—'}" (out of ${purposeCount} different purpose${purposeCount !== 1 ? 's' : ''})`,
+      `• Most Active Department: "${topDept?.[0] || '—'}"`,
+      `• Total Departments Active: ${deptCount}`,
+      `• Unique Students: ${uniqueStudents}`,
+      `• Average Session Duration: ${avgDurStr} (${completed.length} completed session${completed.length !== 1 ? 's' : ''})`,
+      ``,
+      `⚠️ Note: This is a statistical summary because the AI service is currently unavailable. To enable AI-powered insights, set the GEMINI_API_KEY environment variable and redeploy.`,
+    ].join('\n');
+  };
+
   const generateAiSummary = async () => {
     if (!filteredLogs.length) return;
     setIsGeneratingAi(true); setAiSummary(null);
     try {
-      const res = await fetch('/api/ai-summary', {
+      const res = await fetch('/NEULib/api/ai-summary', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           startDate, endDate,
@@ -183,10 +244,21 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
           })),
         }),
       });
+      if (!res.ok) {
+        // Server unreachable or quota error — fall back to statistical summary
+        setAiSummary(buildStatisticalSummary());
+        return;
+      }
       const result = await res.json();
-      setAiSummary(result.summary || 'No summary generated.');
+      // If the API returned an error or empty summary, use statistical fallback
+      if (result.error || !result.summary || result.summary.includes('unavailable')) {
+        setAiSummary(buildStatisticalSummary());
+      } else {
+        setAiSummary(result.summary);
+      }
     } catch {
-      setAiSummary('The AI analyst is currently unavailable. Please export to PDF for manual review.');
+      // Network error — always fall back to statistical summary
+      setAiSummary(buildStatisticalSummary());
     } finally { setIsGeneratingAi(false); }
   };
 
@@ -332,7 +404,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                   disabled={deptFilter === 'All Departments'}
                 >
                   <SelectTrigger className="h-11 rounded-xl bg-slate-50 border-slate-200 font-semibold text-sm disabled:opacity-50">
-                    <SelectValue placeholder={deptFilter === 'All Departments' ? 'Select Department first' : 'All Programs'} />
+                    <SelectValue placeholder={deptFilter === 'All Departments' ? 'Select dept first' : 'All Programs'} />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl max-h-64">
                     <SelectItem value="All Programs" className="font-semibold text-sm">All Programs</SelectItem>
@@ -361,6 +433,21 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            {/* Tap-out status filter */}
+            <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 w-fit">
+              {([
+                { value: 'all',          label: 'All Sessions' },
+                { value: 'with_timeout', label: 'With Timeout' },
+                { value: 'no_tap',       label: 'No Tap-out' },
+              ] as const).map(opt => (
+                <button key={opt.value} onClick={() => setTapOutFilter(opt.value)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all"
+                  style={tapOutFilter === opt.value ? { background: navy, color: 'white' } : { color: '#64748b' }}>
+                  {opt.label}
+                </button>
+              ))}
             </div>
 
             <p className="text-slate-400 text-sm font-medium">
@@ -516,7 +603,8 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
               <TableHeader>
                 <TableRow className="h-11 border-slate-100">
                   <TableHead className="pl-5 text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('studentName')}>Student <ArchiveSortIcon field="studentName" /></TableHead>
-                  <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden sm:table-cell">Student ID</TableHead>
+                  <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden sm:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('studentId')}>Student ID <ArchiveSortIcon field="studentId" /></TableHead>
+                  <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden lg:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('program')}>Program <ArchiveSortIcon field="program" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('deptID')}>Dept <ArchiveSortIcon field="deptID" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden sm:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('purpose')}>Purpose <ArchiveSortIcon field="purpose" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('checkInTimestamp')}>Time In <ArchiveSortIcon field="checkInTimestamp" /></TableHead>
@@ -560,6 +648,16 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                           style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
                           {l.deptID}
                         </span>
+                      </TableCell>
+
+                      {/* Program */}
+                      <TableCell className="hidden lg:table-cell">
+                        {(l as any).program ? (
+                          <span className="text-xs font-bold px-2.5 py-1.5 rounded-lg"
+                            style={{ background: 'hsl(262,83%,58%,0.08)', color: 'hsl(262,83%,45%)', fontFamily: "'DM Mono',monospace" }}>
+                            {(l as any).program}
+                          </span>
+                        ) : <span className="text-slate-300 text-xs">—</span>}
                       </TableCell>
 
                       {/* Purpose */}

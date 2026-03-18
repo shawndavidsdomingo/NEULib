@@ -2,25 +2,32 @@
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { format, parseISO, isToday } from 'date-fns';
+import { format, parseISO, isToday, startOfDay } from 'date-fns';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Activity, User, Loader2, LogIn, LogOut } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, orderBy, limit } from 'firebase/firestore';
+import { collection, query, orderBy, limit, where, Timestamp } from 'firebase/firestore';
 import { LibraryLogRecord, DEPARTMENTS } from '@/lib/firebase-schema';
 
 export function LiveFeed() {
   const db = useFirestore();
 
+  // Only fetch logs from today onwards — reduces read cost and guarantees freshness
+  const todayStart = startOfDay(new Date()).toISOString();
+
   const logsQuery = useMemoFirebase(() => {
     return query(
       collection(db, 'library_logs'),
+      where('checkInTimestamp', '>=', todayStart),
       orderBy('checkInTimestamp', 'desc'),
-      limit(20)
+      limit(100)
     );
-  }, [db]);
+  }, [db, todayStart]);
 
-  const { data: recentLogs, isLoading } = useCollection<LibraryLogRecord>(logsQuery);
+  const { data: todayAllLogs, isLoading } = useCollection<LibraryLogRecord>(logsQuery);
+
+  // Show only users currently inside (no checkout) — real-time: when they tap out they vanish
+  const recentLogs = todayAllLogs?.filter(l => !l.checkOutTimestamp) ?? [];
 
   return (
     <Card className="school-card bg-white/40 rounded-3xl overflow-hidden shadow-sm">
@@ -34,7 +41,7 @@ export function LiveFeed() {
               <div className="live-dot" style={{width:8,height:8}} />
               <CardTitle className="text-2xl font-headline font-bold text-slate-900">Live Traffic</CardTitle>
             </div>
-            <CardDescription className="text-sm font-medium text-slate-500">Real-time entries and exits</CardDescription>
+            <CardDescription className="text-sm font-medium text-slate-500">Students currently inside the library</CardDescription>
           </div>
         </div>
       </CardHeader>
@@ -47,7 +54,7 @@ export function LiveFeed() {
             </div>
           ) : !recentLogs || recentLogs.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground font-medium italic">
-              No traffic recorded yet.
+              No students currently inside.
             </div>
           ) : (
             <div>
@@ -61,7 +68,6 @@ export function LiveFeed() {
               </div>
               <div className="divide-y divide-slate-50">
                 {recentLogs.map((log) => {
-                  const isNoTap = !log.checkOutTimestamp && !isToday(parseISO(log.checkInTimestamp));
                   return (
                     <div key={log.id} className="grid grid-cols-[2fr_1fr_1fr] sm:grid-cols-[2fr_1fr_1fr_1fr_1fr] gap-2 px-4 py-3 items-center hover:bg-slate-50/60 transition-colors">
                       {/* Name + Dept */}
@@ -78,15 +84,9 @@ export function LiveFeed() {
                       <span className="text-xs font-semibold px-2 py-1 rounded-full bg-primary/5 text-primary w-fit truncate">
                         {log.purpose}
                       </span>
-                      {/* Status — always visible */}
+                      {/* Status — always Active since we only show unchecked sessions */}
                       <div className="flex justify-end">
-                        {log.checkOutTimestamp ? (
-                          <span className="text-xs font-bold px-2 py-1 rounded-full bg-slate-100 text-slate-500">Done</span>
-                        ) : isNoTap ? (
-                          <span className="text-xs font-bold px-2 py-1 rounded-full bg-red-50 text-red-500">No Tap</span>
-                        ) : (
-                          <span className="text-xs font-bold px-2 py-1 rounded-full bg-blue-50 text-blue-600 animate-pulse">Active</span>
-                        )}
+                        <span className="text-xs font-bold px-2 py-1 rounded-full bg-blue-50 text-blue-600 animate-pulse">Active</span>
                       </div>
                       {/* Student ID — desktop only */}
                       <span className="text-xs font-bold text-slate-500 truncate hidden sm:block" style={{ fontFamily: "'DM Mono',monospace" }}>

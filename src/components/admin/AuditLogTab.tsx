@@ -5,7 +5,7 @@ import { format, parseISO } from 'date-fns';
 import {
   ShieldAlert, Search, Filter, ArrowUpDown, ArrowUp, ArrowDown,
   Loader2, UserCheck, UserX, Trash2, Lock, Unlock, Edit3,
-  UserPlus, Key, RefreshCw, Bell,
+  UserPlus, Key, RefreshCw, Bell, Maximize2, X as XIcon,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -87,6 +87,7 @@ export function AuditLogTab() {
   const [category,     setCategory]     = useState('all');
   const [sortField,    setSortField]    = useState<SortField>('timestamp');
   const [sortDir,      setSortDir]      = useState<'asc' | 'desc'>('desc');
+  const [expandedLog,  setExpandedLog]  = useState<AuditLogRecord | null>(null);
 
   const logsQuery = useMemoFirebase(
     () => query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(500)),
@@ -286,11 +287,22 @@ export function AuditLogTab() {
                         )}
                       </TableCell>
 
-                      {/* Detail */}
-                      <TableCell className="pr-5 max-w-[200px]">
-                        <p className="text-xs text-slate-500 font-medium leading-relaxed truncate">
-                          {log.detail || '—'}
-                        </p>
+                      {/* Detail + Full View */}
+                      <TableCell className="pr-5 max-w-[220px]">
+                        <div className="flex items-start gap-2">
+                          <p className="text-xs text-slate-500 font-medium leading-relaxed truncate flex-1">
+                            {log.detail || '—'}
+                          </p>
+                          {log.detail && log.detail.length > 30 && (
+                            <button
+                              onClick={() => setExpandedLog(log)}
+                              title="Full view"
+                              className="flex-shrink-0 p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                            >
+                              <Maximize2 size={13} />
+                            </button>
+                          )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -299,6 +311,104 @@ export function AuditLogTab() {
             </Table>
           </div>
         )}
+      </div>
+
+      {/* ── Full View Modal ── */}
+      {expandedLog && (
+        <AuditFullViewModal log={expandedLog} onClose={() => setExpandedLog(null)} />
+      )}
+    </div>
+  );
+}
+
+// ── Extracted modal so it's valid JSX (can't use IIFE with const inside JSX) ──
+function AuditFullViewModal({ log, onClose }: { log: AuditLogRecord; onClose: () => void }) {
+  const meta = ACTION_META[log.action] ?? { label: log.action, color: '#64748b', icon: ShieldAlert };
+  const Icon = meta.icon;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(6px)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+
+        {/* Header */}
+        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between"
+          style={{ background: `${navy}07` }}>
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl text-white" style={{ background: navy }}>
+              <ShieldAlert size={16} />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base" style={{ fontFamily: "'Playfair Display',serif" }}>
+                Audit Entry
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                {format(parseISO(log.timestamp), 'MMM d, yyyy — h:mm:ss a')}
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
+            <XIcon size={16} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4" style={{ scrollbarWidth: 'thin', scrollbarColor: 'hsl(221,72%,70%) transparent', maxHeight: '60vh', overflowY: 'auto' }}>
+          {/* Action badge */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20">Action</span>
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full"
+              style={{ background: `${meta.color}12`, color: meta.color }}>
+              <Icon size={11} /> {meta.label}
+            </span>
+          </div>
+
+          {/* Actor */}
+          <div className="flex items-start gap-2">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20 pt-0.5">Admin</span>
+            <div>
+              <p className="text-sm font-semibold text-slate-900">{log.actorName}</p>
+              <p className="text-xs text-slate-400 font-medium">{log.actorEmail}</p>
+            </div>
+          </div>
+
+          {/* Target */}
+          {log.targetName && (
+            <div className="flex items-start gap-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20 pt-0.5">Target</span>
+              <div>
+                <p className="text-sm font-semibold text-slate-900">{log.targetName}</p>
+                {log.targetId && (
+                  <p className="text-xs text-slate-400 font-mono">{log.targetId}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Full detail */}
+          {log.detail && (
+            <div className="flex items-start gap-2">
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20 pt-0.5">Detail</span>
+              <p className="text-sm text-slate-700 font-medium leading-relaxed flex-1 break-words">
+                {log.detail}
+              </p>
+            </div>
+          )}
+
+          {/* Timestamp */}
+          <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20">Time</span>
+            <p className="text-xs font-mono text-slate-500">{log.timestamp}</p>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-slate-100">
+          <button onClick={onClose}
+            className="w-full h-10 rounded-xl font-semibold text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all">
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );

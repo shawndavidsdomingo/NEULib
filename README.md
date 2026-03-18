@@ -484,6 +484,7 @@ The system ships with 16 NEU colleges pre-seeded:
 
 | Code | College |
 |---|---|
+| LIBRARY | Library |
 | ABM | College of Accountancy |
 | CAS | College of Arts and Sciences |
 | CBA | College of Business Administration |

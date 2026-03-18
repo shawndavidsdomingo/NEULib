@@ -12,7 +12,9 @@ service cloud.firestore {
         request.auth.token.email == "shawndavidsobremontedomingo@gmail.com";
     }
 
-    // Any signed-in non-anonymous user with a verified email
+    // Any signed-in user with an email (non-anonymous Google login).
+    // This intentionally uses != null check on email — works immediately
+    // after signInWithPopup without requiring a token refresh round-trip.
     function isAuthenticatedUser() {
       return isSignedIn() && request.auth.token.email != null;
     }
@@ -26,12 +28,11 @@ service cloud.firestore {
     }
 
     // /users — unified collection
-    // NOTE: Doc IDs are student/staff IDs (e.g. "24-12864-481"), NOT Firebase UIDs.
-    // Because UIDs != doc IDs we cannot do server-side role lookups in rules.
-    // Deletes are restricted to NEU institutional emails — the app UI further
-    // enforces that only super_admin role users see the delete button.
+    // Read: any signed-in user (including right after Google popup — isSignedIn()
+    // is satisfied immediately, avoiding token-propagation race conditions).
+    // Write guards remain strict.
     match /users/{userId} {
-      allow read:   if isAuthenticatedUser();
+      allow read:   if isSignedIn();
       allow create: if isSignedIn();
       allow update: if isOwnerEmail() ||
                        isNEUEmail() ||
@@ -63,26 +64,21 @@ service cloud.firestore {
       allow delete: if isAuthenticatedUser();
     }
 
-    // /visit_purposes — Firestore-backed kiosk purpose list
-    // Public read so the anonymous kiosk terminal can fetch it
-    // Writable only by NEU institutional staff
+    // /visit_purposes — public read so anonymous kiosk can fetch
     match /visit_purposes/{purposeId} {
       allow read:  if true;
       allow write: if isNEUEmail() || isOwnerEmail();
     }
 
-    // /audit_logs — append-only record of all admin actions
-    // Any authenticated user can create (staff log their own actions)
-    // NEU staff can read; only NEU email can delete (for cleanup)
-    // Updates are disabled — audit logs are immutable
+    // /audit_logs — append-only, immutable
     match /audit_logs/{logId} {
       allow read:   if isNEUEmail() || isOwnerEmail();
       allow create: if isAuthenticatedUser();
       allow update: if false;
       allow delete: if isNEUEmail() || isOwnerEmail();
     }
-    // /credential_requests — student-initiated credential change requests
-    // Students can create; NEU staff and the requesting student can read/update
+
+    // /credential_requests
     match /credential_requests/{reqId} {
       allow read:   if isAuthenticatedUser();
       allow create: if isSignedIn();

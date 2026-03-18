@@ -4,12 +4,12 @@ import { useMemo, useState, useEffect } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { format, parseISO, isToday, differenceInMinutes } from 'date-fns';
+import { format, parseISO, isToday, differenceInMinutes, startOfDay } from 'date-fns';
 import { Loader2, Users, Search, Filter, Radio, Clock, Bell } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useUser } from '@/firebase';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, orderBy, addDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, addDoc, doc, updateDoc, where } from 'firebase/firestore';
 import { LibraryLogRecord, DepartmentRecord } from '@/lib/firebase-schema';
 
 const navy = 'hsl(221,72%,22%)';
@@ -58,22 +58,28 @@ export function CurrentVisitors() {
     return () => clearInterval(timer);
   }, []);
 
+  // Filter to today at the Firestore level — no stale previous-day data
+  const todayStart = startOfDay(new Date()).toISOString();
+
   const logsQuery = useMemoFirebase(
-    () => query(collection(db, 'library_logs'), orderBy('checkInTimestamp', 'desc')),
-    [db]
+    () => query(
+      collection(db, 'library_logs'),
+      where('checkInTimestamp', '>=', todayStart),
+      orderBy('checkInTimestamp', 'desc')
+    ),
+    [db, todayStart]
   );
   const { data: allLogs, isLoading } = useCollection<LibraryLogRecord>(logsQuery);
 
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
 
-  const todayLogs = useMemo(() => {
-    if (!allLogs) return [];
-    return allLogs.filter(l => isToday(parseISO(l.checkInTimestamp)));
-  }, [allLogs]);
+  // allLogs is already filtered to today by the Firestore query — this is a safety-net passthrough
+  const todayLogs = useMemo(() => allLogs ?? [], [allLogs]);
 
+  // Only users with no checkOutTimestamp — when they tap out Firestore real-time removes them
   const currentlyInside = useMemo(() =>
-    todayLogs.filter(l => !l.checkOutTimestamp),
+    todayLogs.filter(l => !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp))),
     [todayLogs]
   );
 
@@ -83,8 +89,9 @@ export function CurrentVisitors() {
       const matchSearch  = !s || (l.studentName || '').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
       const matchDept    = deptFilter    === 'All Departments' || l.deptID   === deptFilter;
       const matchPurpose = purposeFilter === 'All Purposes'    || l.purpose  === purposeFilter;
+      // 'Inside': strictly no checkout AND today — tapped-out users disappear in real time
       const matchStatus  = statusFilter  === 'All'
-        || (statusFilter === 'Inside'    && !l.checkOutTimestamp)
+        || (statusFilter === 'Inside'    && !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp)))
         || (statusFilter === 'Completed' && !!l.checkOutTimestamp);
       return matchSearch && matchDept && matchPurpose && matchStatus;
     });

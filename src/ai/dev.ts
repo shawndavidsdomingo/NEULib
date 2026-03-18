@@ -1,5 +1,7 @@
-// No dotenv needed since we're using hardcoded API key in genkit.ts
-console.log('Starting AI-powered visit summary flow with hardcoded API key...');
-console.log('Using Gemini Developer API key: AIzaSyBPTi_LH2X2pbVyzBfKhWBH-N5nNKEwADo');
+// Dev entrypoint for Genkit flows.
+// Requires GEMINI_API_KEY to be set in your environment or .env.local
+// Never log or print the API key value.
+console.log('[dev] Starting AI-powered visit summary flow...');
+console.log('[dev] GEMINI_API_KEY set:', !!process.env.GEMINI_API_KEY);
 
 import '@/ai/flows/ai-powered-visit-summary-flow.ts';

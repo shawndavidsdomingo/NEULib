@@ -365,7 +365,7 @@ export default function Home() {
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 text-white/40 text-xs font-semibold">
-            <Radio size={9} className="animate-pulse text-red-400" /> Live System
+            <Radio size={9} className="animate-pulse text-green-400" /> Live System
           </div>
         </div>
       </header>

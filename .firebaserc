@@ -2,6 +2,14 @@
   "projects": {
     "default": "studio-6614574349-e7e83"
   },
-  "targets": {},
+  "targets": {
+    "studio-6614574349-e7e83": {
+      "hosting": {
+        "shawndavidsdomingo-neu-library": [
+          "studio-6614574349-e7e83"
+        ]
+      }
+    }
+  },
   "etags": {}
 }

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { format } from 'date-fns';
-import { X, FileEdit, IdCard, GraduationCap, User, ChevronRight, Loader2 } from 'lucide-react';
+import { X, FileEdit, IdCard, GraduationCap, User, ChevronRight, Loader2, ShieldCheck } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
@@ -11,13 +11,14 @@ import { credentialRequestId } from '@/lib/firestore-ids';
 import { UserRecord, DEPARTMENTS, ProgramRecord } from '@/lib/firebase-schema';
 import { formatStudentId } from '@/lib/student-id-formatter';
 import { useToast } from '@/hooks/use-toast';
+import { SuccessCard } from '@/components/ui/SuccessCard';
 
 interface Props {
   profile: UserRecord;
   onClose: () => void;
 }
 
-type RequestType = 'name' | 'student_id' | 'dept_program' | null;
+type RequestType = 'name' | 'student_id' | 'dept_program' | 'admin_privilege' | null;
 
 const navy = 'hsl(221,72%,22%)';
 
@@ -26,6 +27,8 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
   const { toast } = useToast();
   const [type,        setType]        = useState<RequestType>(null);
   const [submitting,  setSubmitting]  = useState(false);
+  const [submitted,   setSubmitted]   = useState(false);
+  const [submittedType, setSubmittedType] = useState<RequestType>(null);
 
   // Name change fields
   const [newFirst,    setNewFirst]    = useState(profile.firstName  || '');
@@ -37,7 +40,9 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
   const [newId,       setNewId]       = useState('');
   const [idReason,    setIdReason]    = useState('');
 
-  // Dept/Program change fields
+  // Admin privilege fields
+  const [adminPrivReason,  setAdminPrivReason]  = useState('');
+  const [adminPrivPreset,  setAdminPrivPreset]  = useState('');
   const [newDept,     setNewDept]     = useState(profile.deptID  || '');
   const [newProgram,  setNewProgram]  = useState(profile.program || '');
   const [deptReason,  setDeptReason]  = useState('');
@@ -106,10 +111,20 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
           requiresVerification: true,
           verified: false,
         });
+      } else if (type === 'admin_privilege') {
+        const reason = adminPrivPreset || adminPrivReason.trim();
+        if (!reason) { toast({ title: 'Reason is required', variant: 'destructive' }); setSubmitting(false); return; }
+        const credDocId = credentialRequestId();
+        await setDoc(doc(db, 'credential_requests', credDocId), {
+          ...base,
+          type: 'admin_privilege',
+          requested: { role: 'admin' },
+          current:   { role: profile.role },
+          reason,
+        });
       }
-
-      toast({ title: 'Request Submitted', description: 'Your request has been sent to the administrator for review.' });
-      onClose();
+      setSubmittedType(type);
+      setSubmitted(true);
     } catch {
       toast({ title: 'Submission failed', variant: 'destructive' });
     } finally {
@@ -118,6 +133,18 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
   };
 
   return (
+    <>
+      {submitted && (
+        <SuccessCard
+          title={submittedType === 'admin_privilege' ? 'Privilege Request Sent!' : 'Request Submitted!'}
+          description={
+            submittedType === 'admin_privilege'
+              ? 'Your admin privilege request has been sent. Any active admin can review and approve it in the dashboard.'
+              : 'Your request has been sent to the administrator for review. You will be notified once it has been processed.'
+          }
+          onClose={onClose}
+        />
+      )}
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
@@ -132,9 +159,9 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
             </div>
             <div>
               <h3 className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>
-                Request Credential Change
+                Contact Admin
               </h3>
-              <p className="text-slate-400 text-xs mt-0.5">Changes are subject to admin review</p>
+              <p className="text-slate-400 text-xs mt-0.5">Changes & requests are subject to admin review</p>
             </div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400">
@@ -147,11 +174,12 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
           {/* Step 1: Choose type */}
           {!type && (
             <div className="space-y-3">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Select the type of change</p>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Select the type of request</p>
               {([
-                { id: 'name',        icon: User,         label: 'Name Change',           desc: 'First, middle, or last name' },
-                { id: 'student_id',  icon: IdCard,       label: 'Student ID Change',     desc: 'Requires physical verification at Admin Office' },
-                { id: 'dept_program',icon: GraduationCap,label: 'Department / Program',  desc: 'Requires physical verification at Admin Office' },
+                { id: 'name',            icon: User,         label: 'Name Change',              desc: 'First, middle, or last name' },
+                { id: 'student_id',      icon: IdCard,       label: 'Student ID Change',        desc: 'Requires physical verification at Admin Office' },
+                { id: 'dept_program',    icon: GraduationCap,label: 'Department / Program',     desc: 'Requires physical verification at Admin Office' },
+                { id: 'admin_privilege', icon: ShieldCheck,  label: 'Request Admin Privilege',  desc: 'Apply to become a library admin' },
               ] as const).map(opt => (
                 <button key={opt.id} onClick={() => setType(opt.id)}
                   className="w-full flex items-center gap-4 p-4 rounded-xl border-2 text-left transition-all hover:border-blue-200 hover:bg-blue-50/30 active:scale-[0.99]"
@@ -292,6 +320,47 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
               </div>
             </div>
           )}
+
+          {/* ── Admin Privilege Request form ── */}
+          {type === 'admin_privilege' && (
+            <div className="space-y-4">
+              <button onClick={() => setType(null)} className="text-xs font-semibold text-slate-400 hover:text-slate-600 flex items-center gap-1">← Back</button>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Request Admin Privilege</p>
+
+              <div className="p-3 rounded-xl text-xs font-medium text-slate-500 bg-slate-50 border border-slate-100 space-y-1">
+                <p className="font-bold text-slate-700">What happens next?</p>
+                <p>Any active Admin or Super Admin can review and approve this request in the <strong>Requests</strong> tab of the dashboard.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-500 uppercase tracking-wide block">Reason <span className="text-red-400">*</span></label>
+                {([
+                  'I have been blocked from admin access',
+                  'Applying as a new Library Admin',
+                  'My admin account was accidentally removed',
+                  'I was assigned as a Library Staff',
+                ] as const).map(preset => (
+                  <button key={preset} onClick={() => setAdminPrivPreset(p => p === preset ? '' : preset)}
+                    className="w-full text-left p-3 rounded-xl border text-sm font-medium transition-all"
+                    style={{
+                      borderColor: adminPrivPreset === preset ? navy : '#e2e8f0',
+                      background:  adminPrivPreset === preset ? `${navy}07` : '#fafafa',
+                      color: '#1e293b',
+                    }}>
+                    {preset}
+                  </button>
+                ))}
+                <textarea
+                  value={adminPrivReason}
+                  onChange={e => { setAdminPrivReason(e.target.value); setAdminPrivPreset(''); }}
+                  rows={2}
+                  placeholder="Or write your own reason…"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm font-medium resize-none outline-none focus:border-blue-400"
+                  style={{ lineHeight: '1.6' }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -310,5 +379,6 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
         </div>
       </div>
     </div>
+    </>
   );
 }

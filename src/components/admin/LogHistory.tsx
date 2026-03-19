@@ -46,12 +46,22 @@ export function LogHistory() {
   const [programFilter, setProgramFilter] = useState('All Programs');
   const [purposeFilter, setPurposeFilter] = useState('All Purposes');
   const [statusFilter,  setStatusFilter]  = useState('All');
+  const [roleFilter,    setRoleFilter]    = useState('All');
   const [dateRange,     setDateRange]     = useState('7');
   const [sortField,     setSortField]     = useState<SortField>('checkInTimestamp');
   const [sortDir,       setSortDir]       = useState<'asc' | 'desc'>('desc');
 
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
+
+  // For role filtering — build studentId → role map
+  const usersRef2 = useMemoFirebase(() => collection(db, 'users'), [db]);
+  const { data: allUsers } = useCollection<{ id: string; role: string }>(usersRef2);
+  const userRoleMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    (allUsers || []).forEach(u => { m[u.id] = u.role; });
+    return m;
+  }, [allUsers]);
 
   const programsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
   const { data: allPrograms } = useCollection<ProgramRecord>(programsRef);
@@ -101,13 +111,19 @@ export function LogHistory() {
       const matchS  = !s || (l.studentName||'').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
       const matchD  = deptFilter    === 'All Departments' || l.deptID  === deptFilter;
       const matchP  = purposeFilter === 'All Purposes'    || l.purpose === purposeFilter;
+      // Role filter: look up student's role from userRoleMap
+      const userRole = userRoleMap[l.studentId] || 'student';
+      const isStaff  = userRole === 'admin' || userRole === 'super_admin';
+      const matchRole = roleFilter === 'All'
+        || (roleFilter === 'Student' && !isStaff)
+        || (roleFilter === 'Staff'   && isStaff);
       const ci      = parseISO(l.checkInTimestamp);
       const noTap   = !l.checkOutTimestamp && !isToday(ci);
       const matchSt = statusFilter === 'All'
         || (statusFilter === 'Active'    && !l.checkOutTimestamp && isToday(ci))
         || (statusFilter === 'Completed' && !!l.checkOutTimestamp)
         || (statusFilter === 'No Tap'    && noTap);
-      return matchS && matchD && matchP && matchSt;
+      return matchS && matchD && matchP && matchSt && matchRole;
     }).sort((a, b) => {
       let va = '', vb = '';
       if      (sortField === 'studentName')       { va = a.studentName||''; vb = b.studentName||''; }
@@ -127,7 +143,7 @@ export function LogHistory() {
       const cmp = va < vb ? -1 : va > vb ? 1 : 0;
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [allLogs, search, deptFilter, purposeFilter, statusFilter, sortField, sortDir]);
+  }, [allLogs, search, deptFilter, purposeFilter, statusFilter, roleFilter, sortField, sortDir, userRoleMap]);
 
   const toggleSort = (f: SortField) => {
     if (sortField === f) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -245,6 +261,18 @@ export function LogHistory() {
               </button>
             ))}
           </div>
+
+          {/* Role filter — Staff pinned first */}
+          <Select value={roleFilter} onValueChange={setRoleFilter}>
+            <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl text-xs font-semibold">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-xl">
+              <SelectItem value="All"     className="text-xs font-semibold">All Roles</SelectItem>
+              <SelectItem value="Staff"   className="text-xs font-semibold">Staff / Faculty</SelectItem>
+              <SelectItem value="Student" className="text-xs font-semibold">Student</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -377,4 +405,4 @@ export function LogHistory() {
       </div>
     </div>
   );
-} 
+}

@@ -15,6 +15,7 @@ import { collection, query, orderBy, doc, updateDoc, addDoc, getDoc, setDoc, del
 import { useToast } from '@/hooks/use-toast';
 import { writeAuditLog } from '@/lib/audit-logger';
 import { notificationId } from '@/lib/firestore-ids';
+import { SuccessCard } from '@/components/ui/SuccessCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface CredentialRequest {
@@ -22,7 +23,7 @@ interface CredentialRequest {
   studentId:   string;
   studentName: string;
   email:       string;
-  type:        'name' | 'student_id' | 'dept_program';
+  type:        'name' | 'student_id' | 'dept_program' | 'admin_privilege';
   status:      'pending' | 'approved' | 'partial' | 'revoked' | 'pending_verification';
   current:     Record<string, string>;
   requested:   Record<string, string>;
@@ -49,9 +50,10 @@ const card: React.CSSProperties = {
 };
 
 const TYPE_META = {
-  name:         { label: 'Name Change',        icon: User,         color: '#2563eb' },
-  student_id:   { label: 'Student ID Change',  icon: IdCard,       color: '#7c3aed' },
-  dept_program: { label: 'Dept / Program',     icon: GraduationCap,color: '#059669' },
+  name:            { label: 'Name Change',           icon: User,         color: '#2563eb' },
+  student_id:      { label: 'Student ID Change',     icon: IdCard,       color: '#7c3aed' },
+  dept_program:    { label: 'Dept / Program',        icon: GraduationCap,color: '#059669' },
+  admin_privilege: { label: 'Admin Privilege',       icon: ShieldCheck,  color: '#d97706' },
 };
 
 const STATUS_META = {
@@ -79,6 +81,7 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
   const [revokeCustom,  setRevokeCustom]  = useState('');
 
   const [saving, setSaving] = useState(false);
+  const [successMsg, setSuccessMsg] = useState<{ title: string; description: string } | null>(null);
 
   const sendStudentNotif = async (studentId: string, message: string) => {
     const nid = notificationId(studentId);
@@ -156,15 +159,19 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
         }
 
         // 4. Delete old user doc
-        await deleteDoc(doc(db, 'users', actualDocId)); // delete using actual doc ID
-        // 4. Update request as approved
+        await deleteDoc(doc(db, 'users', actualDocId));
         await updateDoc(ref, { status: 'approved', updatedAt: new Date().toISOString() });
         await sendStudentNotif(newId, `Your Student ID change request has been approved. Your new ID is ${newId}. Please use this ID to log in going forward.`);
         writeAuditLog(db, user, 'user.edit', { targetId: newId, targetName: req.studentName, detail: `Student ID changed from ${req.studentId} to ${newId}` });
+
+      } else if (req.type === 'admin_privilege') {
+        await updateDoc(doc(db, 'users', req.studentId), { role: 'admin', status: 'active' });
+        await updateDoc(ref, { status: 'approved', updatedAt: new Date().toISOString() });
+        await sendStudentNotif(req.studentId, `Your request for Admin Privilege has been approved. You now have admin access to the Library Portal.`);
+        writeAuditLog(db, user, 'role.promote', { targetId: req.studentId, targetName: req.studentName, detail: `Admin privilege granted via credential request` });
       }
 
-      toast({ title: 'Request Approved', description: 'Student has been notified.' });
-      onDone();
+      setSuccessMsg({ title: 'Request Approved', description: 'The student has been notified of the decision.' });
     } catch (err: any) {
       const msg = err?.message || err?.code || 'Unknown error';
       console.error('[handleApprove]', msg, err);
@@ -180,8 +187,7 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
       await updateDoc(doc(db, 'credential_requests', req.id), { status: 'revoked', adminNote: reason, updatedAt: new Date().toISOString() });
       await sendStudentNotif(req.studentId, `Your credential change request has been revoked. Reason: ${reason}`);
       writeAuditLog(db, user, 'user.edit', { targetId: req.studentId, targetName: req.studentName, detail: `Credential request revoked: ${reason}` });
-      toast({ title: 'Request Revoked', description: 'Student has been notified.' });
-      onDone();
+      setSuccessMsg({ title: 'Request Revoked', description: 'The student has been notified of the decision.' });
     } catch (err: any) {
       const msg = err?.message || err?.code || 'Unknown error';
       console.error('[handleRevoke]', msg, err);
@@ -202,6 +208,15 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
   const canApprove = !req.requiresVerification || req.verified;
 
   return (
+    <>
+      {successMsg && (
+        <SuccessCard
+          title={successMsg.title}
+          description={successMsg.description}
+          onClose={onDone}
+          color={successMsg.title.includes('Revoked') ? 'amber' : 'green'}
+        />
+      )}
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
@@ -369,6 +384,7 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -430,14 +446,15 @@ export function CredentialRequestsTab() {
               className="pl-8 h-9 bg-slate-50 border-slate-200 rounded-xl text-sm font-medium" />
           </div>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="h-9 w-40 bg-slate-50 border-slate-200 rounded-xl text-xs font-semibold">
+            <SelectTrigger className="h-9 w-44 bg-slate-50 border-slate-200 rounded-xl text-xs font-semibold">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="rounded-xl">
-              <SelectItem value="all" className="text-xs font-semibold">All Types</SelectItem>
-              <SelectItem value="name" className="text-xs font-semibold">Name Change</SelectItem>
-              <SelectItem value="student_id" className="text-xs font-semibold">Student ID</SelectItem>
-              <SelectItem value="dept_program" className="text-xs font-semibold">Dept / Program</SelectItem>
+              <SelectItem value="all"             className="text-xs font-semibold">All Types</SelectItem>
+              <SelectItem value="name"            className="text-xs font-semibold">Name Change</SelectItem>
+              <SelectItem value="student_id"      className="text-xs font-semibold">Student ID</SelectItem>
+              <SelectItem value="dept_program"    className="text-xs font-semibold">Dept / Program</SelectItem>
+              <SelectItem value="admin_privilege" className="text-xs font-semibold">Admin Privilege</SelectItem>
             </SelectContent>
           </Select>
           <Select value={statusFilter} onValueChange={setStatusFilter}>

@@ -5,7 +5,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -13,14 +12,16 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
-  UserPlus, Trash2, Loader2, Key, Edit2, Check, X,
-  Shield, BadgeCheck, Info, GraduationCap, ChevronDown, ChevronUp,
-  Building2, UserCheck, UserX,
+  UserPlus, Loader2, Key, Shield, BadgeCheck,
+  Building2, GraduationCap, UserX, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { useFirestore, useCollection, useMemoFirebase, setDocumentNonBlocking, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase';
-import { collection, doc, query, where, getDocs, limit } from 'firebase/firestore';
+import { useFirestore, useCollection, useMemoFirebase, setDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase';
+import { collection, doc, query, where } from 'firebase/firestore';
 import { UserRecord, DepartmentRecord, ProgramRecord } from '@/lib/firebase-schema';
+import { useUser } from '@/firebase';
+import { writeAuditLog } from '@/lib/audit-logger';
+import { SuccessCard } from '@/components/ui/SuccessCard';
 
 function fullName(u: UserRecord) {
   return [u.firstName, u.middleName, u.lastName].filter(Boolean).join(' ') || u.id;
@@ -29,43 +30,26 @@ function initials(u: UserRecord) {
   return [u.firstName?.[0], u.lastName?.[0]].filter(Boolean).join('').toUpperCase() || 'S';
 }
 
+const navy = 'hsl(221,72%,22%)';
+
 export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean }) {
-  // ── Registration form ──
   const [newFirstName,  setNewFirstName]  = useState('');
   const [newMiddleName, setNewMiddleName] = useState('');
   const [newLastName,   setNewLastName]   = useState('');
   const [newAdminId,    setNewAdminId]    = useState('');
   const [newEmail,      setNewEmail]      = useState('');
-  const [newRole,       setNewRole]       = useState<'admin' | 'super_admin'>('admin');
   const [newDeptId,     setNewDeptId]     = useState('');
   const [newProgram,    setNewProgram]    = useState('');
 
-  // ── Edit form ──
-  const [editingId,      setEditingId]      = useState<string | null>(null);
-  const [editFirstName,  setEditFirstName]  = useState('');
-  const [editMiddleName, setEditMiddleName] = useState('');
-  const [editLastName,   setEditLastName]   = useState('');
-  const [editEmail,      setEditEmail]      = useState('');
-  const [editDeptId,     setEditDeptId]     = useState('');
-  const [editProgram,    setEditProgram]    = useState('');
-
-  // ── Promote student ──
-  const [promoteSearch,  setPromoteSearch]  = useState('');
-  const [promoteLoading, setPromoteLoading] = useState(false);
-  const [promoteResult,  setPromoteResult]  = useState<UserRecord | null>(null);
-  const [promoteRole,    setPromoteRole]    = useState<'admin' | 'super_admin'>('admin');
-
-  // ── Revoke ──
   const [staffToRevoke,     setStaffToRevoke]     = useState<{ id: string; name: string } | null>(null);
   const [isRevokeAlertOpen, setIsRevokeAlertOpen] = useState(false);
-
-  // ── Collapse ──
-  const [registryOpen, setRegistryOpen] = useState(true);
+  const [registryOpen,      setRegistryOpen]      = useState(true);
+  const [successCard,       setSuccessCard]       = useState<{ title: string; description: string; color?: 'green' | 'navy' | 'amber' } | null>(null);
 
   const { toast } = useToast();
   const db = useFirestore();
+  const { user } = useUser();
 
-  // Departments + programs
   const deptsRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptsRef);
 
@@ -75,13 +59,6 @@ export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean 
   );
   const { data: newPrograms } = useCollection<ProgramRecord>(newProgramsRef);
 
-  const editProgramsRef = useMemoFirebase(
-    () => editDeptId ? query(collection(db, 'programs'), where('deptID', '==', editDeptId)) : null,
-    [db, editDeptId]
-  );
-  const { data: editPrograms } = useCollection<ProgramRecord>(editProgramsRef);
-
-  // All admin/super_admin users
   const adminsQuery = useMemoFirebase(
     () => query(collection(db, 'users'), where('role', 'in', ['admin', 'super_admin'])),
     [db]
@@ -93,140 +70,182 @@ export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean 
     [adminList]
   );
 
-  // ── Handlers ──
+  const sortedNewPrograms = (newPrograms || []).sort((a, b) => a.code.localeCompare(b.code));
+
+  // ── Register new staff — always as 'admin', never 'super_admin' ───────────
   const handleAddAdmin = () => {
-    if (!isSuperAdmin) { toast({ title: "Unauthorized", variant: "destructive" }); return; }
     if (!newFirstName.trim() || !newLastName.trim() || !newAdminId.trim() || !newEmail.trim()) {
-      toast({ title: "Validation Error", description: "First name, last name, Staff ID, and email are required.", variant: "destructive" });
+      toast({ title: 'Validation Error', description: 'First name, last name, Staff ID, and email are required.', variant: 'destructive' });
       return;
     }
     const data: UserRecord = {
-      id: newAdminId.trim(), firstName: newFirstName.trim(),
-      middleName: newMiddleName.trim() || '', lastName: newLastName.trim(),
-      email: newEmail.trim().toLowerCase(), role: newRole, status: 'active',
-      deptID: newDeptId || '', program: newProgram || '',
+      id:         newAdminId.trim(),
+      firstName:  newFirstName.trim(),
+      middleName: newMiddleName.trim() || '',
+      lastName:   newLastName.trim(),
+      email:      newEmail.trim().toLowerCase(),
+      role:       'admin',   // always 'admin' — super_admin cannot be granted here
+      status:     'active',
+      deptID:     newDeptId || '',
+      program:    newProgram || '',
     };
     setDocumentNonBlocking(doc(db, 'users', newAdminId.trim()), data, { merge: true });
-    toast({ title: "Staff Registered", description: `${fullName(data)} is now authorized.` });
-    setNewFirstName(''); setNewMiddleName(''); setNewLastName('');
-    setNewAdminId(''); setNewEmail(''); setNewRole('admin');
-    setNewDeptId(''); setNewProgram('');
-  };
-
-  const handleUpdateStaff = (id: string) => {
-    if (!isSuperAdmin || !editFirstName.trim() || !editLastName.trim()) return;
-    updateDocumentNonBlocking(doc(db, 'users', id), {
-      firstName: editFirstName.trim(), middleName: editMiddleName.trim() || '',
-      lastName: editLastName.trim(), email: editEmail.trim().toLowerCase(),
-      deptID: editDeptId, program: editProgram,
+    writeAuditLog(db, user, 'role.promote', {
+      targetId:   newAdminId.trim(),
+      targetName: `${data.firstName} ${data.lastName}`,
+      detail:     'Registered as admin via Staff Access',
     });
-    setEditingId(null);
-    toast({ title: "Update Success" });
+    setSuccessCard({
+      title: 'Staff Registered',
+      description: `${fullName(data)} is now an authorized admin and can access the dashboard.`,
+      color: 'green',
+    });
+    setNewFirstName(''); setNewMiddleName(''); setNewLastName('');
+    setNewAdminId(''); setNewEmail(''); setNewDeptId(''); setNewProgram('');
   };
 
-  const handleToggleSuper = (id: string, currentRole: string) => {
-    if (!isSuperAdmin) { toast({ title: "Restricted Action", variant: "destructive" }); return; }
-    const newR = currentRole === 'super_admin' ? 'admin' : 'super_admin';
-    updateDocumentNonBlocking(doc(db, 'users', id), { role: newR });
-    toast({ title: "Role Updated" });
-  };
-
-  const handleSearchStudent = async () => {
-    if (!promoteSearch.trim()) return;
-    setPromoteLoading(true);
-    setPromoteResult(null);
-    try {
-      const term = promoteSearch.trim().toLowerCase();
-      let snap = await getDocs(query(collection(db, 'users'), where('email', '==', term), limit(1)));
-      if (snap.empty) snap = await getDocs(query(collection(db, 'users'), where('id', '==', promoteSearch.trim()), limit(1)));
-      if (!snap.empty) setPromoteResult(snap.docs[0].data() as UserRecord);
-      else toast({ title: "Not Found", description: "No user found with that email or Student ID.", variant: "destructive" });
-    } catch { toast({ title: "Search Error", variant: "destructive" }); }
-    finally { setPromoteLoading(false); }
-  };
-
-  const handlePromote = () => {
-    if (!isSuperAdmin || !promoteResult) return;
-    updateDocumentNonBlocking(doc(db, 'users', promoteResult.id), { role: promoteRole, status: 'active' });
-    toast({ title: "Promoted!", description: `${fullName(promoteResult)} is now a ${promoteRole === 'super_admin' ? 'Super Admin' : 'Regular Admin'}.` });
-    setPromoteResult(null); setPromoteSearch('');
-  };
-
+  // ── Revoke — sets role back to 'student' ──────────────────────────────────
   const confirmRevoke = () => {
-    if (!isSuperAdmin || !staffToRevoke) return;
+    if (!staffToRevoke) return;
     updateDocumentNonBlocking(doc(db, 'users', staffToRevoke.id), { role: 'student', status: 'active' });
-    toast({ title: "Access Revoked", description: `${staffToRevoke.name} has been set back to Student.` });
+    writeAuditLog(db, user, 'role.demote', {
+      targetId:   staffToRevoke.id,
+      targetName: staffToRevoke.name,
+      detail:     'Admin access revoked — role set to student',
+    });
+    setSuccessCard({
+      title: 'Access Revoked',
+      description: `${staffToRevoke.name} has been set back to Student. Their account and logs are preserved.`,
+      color: 'amber',
+    });
     setIsRevokeAlertOpen(false); setStaffToRevoke(null);
   };
 
-  const sortedNewPrograms = (newPrograms || []).sort((a, b) => a.code.localeCompare(b.code));
-  const sortedEditPrograms = (editPrograms || []).sort((a, b) => a.code.localeCompare(b.code));
-  const navy = 'hsl(221,72%,22%)';
+  const thStyle = 'font-bold text-xs uppercase tracking-wide text-slate-500 bg-slate-50/80';
 
   return (
-    <div className="space-y-6">
-      {/* ── Promote Student to Admin ── */}
-      {isSuperAdmin && (
-        <Card className="school-card border-emerald-100">
-          <CardHeader className="px-5 py-4 border-b border-emerald-100" style={{ background: 'rgba(5,150,105,0.04)' }}>
-            <CardTitle className="text-xl font-headline flex items-center gap-2 text-emerald-800">
-              <UserCheck size={18} className="text-emerald-600" /> Promote Student to Admin
-            </CardTitle>
-            <CardDescription>Search by email or Student ID, then grant admin access.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-5 space-y-4">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Search by email or student ID"
-                value={promoteSearch}
-                onChange={e => setPromoteSearch(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleSearchStudent()}
-                className="rounded-xl bg-white"
-              />
-              <Button onClick={handleSearchStudent} disabled={promoteLoading} className="rounded-xl px-5 font-bold">
-                {promoteLoading ? <Loader2 size={15} className="animate-spin" /> : 'Search'}
-              </Button>
-            </div>
-            {promoteResult && (
-              <div className="flex items-center justify-between p-4 bg-white rounded-xl border border-emerald-200">
-                <div>
-                  <p className="font-bold text-slate-900">{fullName(promoteResult)}</p>
-                  <p className="text-xs text-slate-400 mt-0.5">
-                    <span className="font-mono">{promoteResult.email}</span>
-                    {' · '}<span className="font-bold" style={{ color: navy }}>Current: {promoteResult.role}</span>
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Select value={promoteRole} onValueChange={v => setPromoteRole(v as 'admin' | 'super_admin')}>
-                    <SelectTrigger className="w-36 h-9 rounded-xl text-xs font-bold"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="admin">Regular Admin</SelectItem>
-                      <SelectItem value="super_admin">Super Admin</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button onClick={handlePromote} className="h-9 rounded-xl font-bold bg-emerald-600 hover:bg-emerald-700 text-white">
-                    Promote
-                  </Button>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+    <>
+      {successCard && (
+        <SuccessCard
+          title={successCard.title}
+          description={successCard.description}
+          color={successCard.color}
+          onClose={() => setSuccessCard(null)}
+        />
       )}
+    <div className="space-y-6" style={{ fontFamily: "'DM Sans',sans-serif" }}>
 
-      {/* ── Staff Access Registry ── */}
+      {/* ── Register New Staff ─────────────────────────────────────────────── */}
       <Card className="school-card">
-        {/* Collapsible header */}
-        <button
-          className="w-full text-left"
-          onClick={() => setRegistryOpen(o => !o)}
-        >
+        <CardHeader className="px-5 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <UserPlus size={18} style={{ color: navy }} />
+            <div>
+              <CardTitle className="text-xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
+                Register New Staff
+              </CardTitle>
+              <CardDescription className="mt-0.5 text-slate-400 text-sm">
+                Add a staff member to the admin registry. New staff are always registered as <strong>Admin</strong> — Super Admin status is not grantable here.
+              </CardDescription>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="p-5 space-y-4">
+          {/* Name row */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {[
+              { label: 'First Name *',  val: newFirstName,  set: setNewFirstName,  ph: 'Juan'  },
+              { label: 'Middle Name',   val: newMiddleName, set: setNewMiddleName, ph: 'Dela'  },
+              { label: 'Last Name *',   val: newLastName,   set: setNewLastName,   ph: 'Cruz'  },
+            ].map(f => (
+              <div key={f.label} className="space-y-1.5">
+                <label className="text-xs font-bold uppercase tracking-widest text-slate-400">{f.label}</label>
+                <Input placeholder={f.ph} value={f.val} onChange={e => f.set(e.target.value)}
+                  className="bg-slate-50 rounded-xl" />
+              </div>
+            ))}
+          </div>
+
+          {/* ID + Email */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Staff ID *</label>
+              <Input placeholder="XX-YYYYY-ZZ" value={newAdminId} onChange={e => setNewAdminId(e.target.value)}
+                className="bg-slate-50 rounded-xl font-mono" />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Email * (Google account)</label>
+              <Input placeholder="staff@neu.edu.ph" value={newEmail} onChange={e => setNewEmail(e.target.value)}
+                className="bg-slate-50 rounded-xl" />
+            </div>
+          </div>
+
+          {/* Dept + Program */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                <Building2 size={11} /> College / Department
+              </label>
+              <Select value={newDeptId} onValueChange={v => { setNewDeptId(v); setNewProgram(''); }}>
+                <SelectTrigger className="bg-slate-50 rounded-xl h-10">
+                  <SelectValue placeholder="Select Department" />
+                </SelectTrigger>
+                <SelectContent className="max-h-60">
+                  {(depts || []).sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
+                    <SelectItem key={d.deptID} value={d.deptID} className="text-sm font-semibold">
+                      <span className="font-bold mr-2 text-xs" style={{ color: navy }}>[{d.deptID}]</span>
+                      {d.departmentName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                <GraduationCap size={11} /> Program
+              </label>
+              <Select value={newProgram} onValueChange={setNewProgram} disabled={!newDeptId || sortedNewPrograms.length === 0}>
+                <SelectTrigger className="bg-slate-50 rounded-xl h-10 disabled:opacity-50">
+                  <SelectValue placeholder={!newDeptId ? 'Select Department first' : 'Select program'} />
+                </SelectTrigger>
+                <SelectContent className="max-h-60">
+                  {sortedNewPrograms.map(p => (
+                    <SelectItem key={p.code} value={p.code} className="text-sm font-semibold">
+                      <span className="font-bold mr-2 text-xs px-1.5 py-0.5 rounded"
+                        style={{ background: `${navy}0d`, color: navy }}>{p.code}</span>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 pt-1">
+            <Button onClick={handleAddAdmin}
+              className="h-11 px-6 rounded-xl font-bold gap-2 text-white"
+              style={{ background: `linear-gradient(135deg,${navy},hsl(221,60%,32%))`, border: 'none' }}>
+              <UserPlus size={16} /> Register as Admin
+            </Button>
+            {/* Informational note */}
+            <p className="text-xs text-slate-400 font-medium">
+              Role is fixed at <strong>Admin</strong>. Super Admin status cannot be granted through this form.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Staff Access Registry ─────────────────────────────────────────── */}
+      <Card className="school-card">
+        <button className="w-full text-left" onClick={() => setRegistryOpen(o => !o)}>
           <CardHeader className="flex flex-row items-center justify-between px-5 py-4 border-b border-slate-100 cursor-pointer hover:bg-slate-50 transition-colors rounded-t-2xl">
             <div className="flex items-center gap-2">
-              <Key size={18} className="text-primary" />
+              <Key size={18} style={{ color: navy }} />
               <div>
-                <CardTitle className="text-xl font-headline">Staff Access Registry</CardTitle>
-                <CardDescription className="mt-0.5">
+                <CardTitle className="text-xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
+                  Staff Access Registry
+                </CardTitle>
+                <CardDescription className="mt-0.5 text-slate-400 text-sm">
                   {sortedAdmins.length} staff member{sortedAdmins.length !== 1 ? 's' : ''} registered
                 </CardDescription>
               </div>
@@ -238,220 +257,149 @@ export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean 
         </button>
 
         {registryOpen && (
-          <div className="px-5 pt-5 space-y-4 border-b border-slate-100 pb-5">
-
-            {/* Register new staff form */}
-            <div className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-4">
-              <p className="text-xs font-bold uppercase tracking-widest text-slate-500">Register New Staff</p>
-              {/* Name row */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                {[
-                  { label: 'First Name *', val: newFirstName, set: setNewFirstName, ph: 'Juan' },
-                  { label: 'Middle Name',  val: newMiddleName, set: setNewMiddleName, ph: 'Dela' },
-                  { label: 'Last Name *',  val: newLastName,  set: setNewLastName,  ph: 'Cruz' },
-                ].map(f => (
-                  <div key={f.label} className="space-y-1.5">
-                    <label className="text-xs font-bold uppercase tracking-widest text-slate-400">{f.label}</label>
-                    <Input placeholder={f.ph} value={f.val} onChange={e => f.set(e.target.value)} className="bg-white rounded-xl" />
-                  </div>
-                ))}
-              </div>
-              {/* ID + email + role */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Staff ID *</label>
-                  <Input placeholder="XX-YYYYY-ZZ" value={newAdminId} onChange={e => setNewAdminId(e.target.value)} className="bg-white rounded-xl font-mono" />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Email * (Google account)</label>
-                  <Input placeholder="staff@neu.edu.ph" value={newEmail} onChange={e => setNewEmail(e.target.value)} className="bg-white rounded-xl" />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400">Role</label>
-                  <Select value={newRole} onValueChange={v => setNewRole(v as 'admin' | 'super_admin')}>
-                    <SelectTrigger className="bg-white rounded-xl h-10"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="admin">Regular Admin</SelectItem>
-                      <SelectItem value="super_admin">Super Admin</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              {/* Dept + program */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1"><Building2 size={11} /> College / Department</label>
-                  <Select value={newDeptId} onValueChange={v => { setNewDeptId(v); setNewProgram(''); }}>
-                    <SelectTrigger className="bg-white rounded-xl h-10"><SelectValue placeholder="Select Department" /></SelectTrigger>
-                    <SelectContent className="max-h-60">
-                      {(depts || []).sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
-                        <SelectItem key={d.deptID} value={d.deptID} className="text-sm font-semibold">
-                          <span className="font-bold mr-2 text-xs" style={{ color: navy }}>[{d.deptID}]</span>{d.departmentName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-1"><GraduationCap size={11} /> Program</label>
-                  <Select value={newProgram} onValueChange={setNewProgram} disabled={!newDeptId || sortedNewPrograms.length === 0}>
-                    <SelectTrigger className="bg-white rounded-xl h-10 disabled:opacity-50"><SelectValue placeholder={!newDeptId ? 'Select Department first' : 'Select program'} /></SelectTrigger>
-                    <SelectContent className="max-h-60">
-                      {sortedNewPrograms.map(p => (
-                        <SelectItem key={p.code} value={p.code} className="text-sm font-semibold">
-                          <span className="font-bold mr-2 text-xs px-1.5 py-0.5 rounded" style={{ background: `${navy}0d`, color: navy }}>{p.code}</span>{p.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <Button onClick={handleAddAdmin} className="h-10 rounded-xl font-bold" disabled={!isSuperAdmin}>
-                <UserPlus size={16} className="mr-2" /> Register Staff
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {/* Registry table — always visible */}
-        <CardContent className="p-5 pt-4">
-            {/* Registry table */}
-            <div className="rounded-2xl border border-slate-100 overflow-hidden bg-white shadow-sm">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
               <Table>
-                <TableHeader className="bg-slate-50">
-                  <TableRow>
-                    <TableHead className="font-bold py-3 pl-5">Name</TableHead>
-                    <TableHead className="font-bold py-3">Staff ID</TableHead>
-                    <TableHead className="font-bold py-3">Email</TableHead>
-                    <TableHead className="font-bold py-3">Dept</TableHead>
-                    <TableHead className="font-bold py-3">Role</TableHead>
-                    <TableHead className="font-bold py-3 text-center">Super</TableHead>
-                    <TableHead className="text-right font-bold py-3 pr-5">Actions</TableHead>
+                <TableHeader>
+                  <TableRow className="h-11 border-slate-100">
+                    <TableHead className={`pl-5 ${thStyle}`}>Name</TableHead>
+                    <TableHead className={thStyle}>Staff ID</TableHead>
+                    <TableHead className={`hidden sm:table-cell ${thStyle}`}>Email</TableHead>
+                    <TableHead className={thStyle}>Dept</TableHead>
+                    <TableHead className={thStyle}>Role</TableHead>
+                    {/* Only super admins can revoke */}
+                    <TableHead className={`text-right pr-5 ${thStyle}`}>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
-                    <TableRow><TableCell colSpan={7} className="h-32 text-center"><Loader2 className="animate-spin inline-block mr-2" />Loading...</TableCell></TableRow>
-                  ) : sortedAdmins.length > 0 ? sortedAdmins.map(admin => (
-                    <TableRow key={admin.id} className="hover:bg-slate-50">
-                      <TableCell className="pl-5">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${admin.role === 'super_admin' ? 'bg-primary/10 text-primary' : 'bg-slate-100 text-slate-500'}`}>
-                            {initials(admin)}
-                          </div>
-                          {editingId === admin.id ? (
-                            <div className="space-y-1">
-                              <div className="flex gap-1">
-                                <Input value={editFirstName}  onChange={e => setEditFirstName(e.target.value)}  className="h-7 w-24 text-xs rounded-lg" placeholder="First" autoFocus />
-                                <Input value={editMiddleName} onChange={e => setEditMiddleName(e.target.value)} className="h-7 w-20 text-xs rounded-lg" placeholder="Mid" />
-                                <Input value={editLastName}   onChange={e => setEditLastName(e.target.value)}   className="h-7 w-24 text-xs rounded-lg" placeholder="Last" />
-                              </div>
-                              <div className="flex gap-1">
-                                <Input value={editEmail} onChange={e => setEditEmail(e.target.value)} className="h-7 text-xs rounded-lg flex-1" placeholder="email" />
-                              </div>
-                              <div className="flex gap-1">
-                                <Select value={editDeptId} onValueChange={v => { setEditDeptId(v); setEditProgram(''); }}>
-                                  <SelectTrigger className="h-7 w-28 text-xs rounded-lg"><SelectValue placeholder="Dept" /></SelectTrigger>
-                                  <SelectContent className="max-h-48">
-                                    {(depts || []).map(d => <SelectItem key={d.deptID} value={d.deptID} className="text-xs">[{d.deptID}]</SelectItem>)}
-                                  </SelectContent>
-                                </Select>
-                                <Select value={editProgram} onValueChange={setEditProgram} disabled={!editDeptId}>
-                                  <SelectTrigger className="h-7 w-28 text-xs rounded-lg"><SelectValue placeholder="Program" /></SelectTrigger>
-                                  <SelectContent className="max-h-48">
-                                    {sortedEditPrograms.map(p => <SelectItem key={p.code} value={p.code} className="text-xs">{p.code}</SelectItem>)}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                            </div>
-                          ) : (
-                            <div>
-                              <p className="font-bold text-slate-900 text-sm">{fullName(admin)}</p>
-                              {admin.program && <p className="text-xs text-slate-400 font-mono">{admin.program}</p>}
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-
-                      <TableCell className="font-mono text-[11px] text-primary font-bold">{admin.id}</TableCell>
-                      <TableCell className="text-xs text-slate-500">{admin.email || '—'}</TableCell>
-
-                      {/* Dept */}
-                      <TableCell>
-                        {admin.deptID
-                          ? <span className="font-bold text-xs px-2 py-1 rounded-lg" style={{ background: `${navy}0d`, color: navy }}>{admin.deptID}</span>
-                          : <span className="text-slate-300 text-xs">—</span>}
-                      </TableCell>
-
-                      {/* Role badge */}
-                      <TableCell>
-                        {admin.role === 'super_admin'
-                          ? <Badge className="bg-primary/10 text-primary border-none text-[9px] uppercase tracking-widest px-2 py-1 rounded-full gap-1 font-bold"><BadgeCheck size={10} /> Super Admin</Badge>
-                          : <Badge variant="outline" className="text-slate-400 border-slate-200 text-[9px] uppercase tracking-widest px-2 py-1 rounded-full gap-1 font-bold"><Shield size={10} /> Staff</Badge>}
-                      </TableCell>
-
-                      {/* Super toggle */}
-                      <TableCell className="text-center">
-                        <Switch checked={admin.role === 'super_admin'} onCheckedChange={() => handleToggleSuper(admin.id, admin.role)} disabled={!isSuperAdmin} />
-                      </TableCell>
-
-                      {/* Actions */}
-                      <TableCell className="text-right pr-5">
-                        <div className="flex items-center justify-end gap-1">
-                          {editingId === admin.id ? (
-                            <>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleUpdateStaff(admin.id)}><Check size={15} /></Button>
-                              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditingId(null)}><X size={15} /></Button>
-                            </>
-                          ) : (
-                            <>
-                              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-primary" onClick={() => {
-                                setEditingId(admin.id);
-                                setEditFirstName(admin.firstName || '');
-                                setEditMiddleName(admin.middleName || '');
-                                setEditLastName(admin.lastName || '');
-                                setEditEmail(admin.email || '');
-                                setEditDeptId(admin.deptID || '');
-                                setEditProgram(admin.program || '');
-                              }}><Edit2 size={15} /></Button>
-                              {isSuperAdmin && (
-                                <Button variant="ghost" size="icon" className="h-8 w-8 text-amber-400 hover:text-red-500 hover:bg-red-50" title="Revoke admin — set back to student" onClick={() => {
-                                  setStaffToRevoke({ id: admin.id, name: fullName(admin) });
-                                  setIsRevokeAlertOpen(true);
-                                }}><UserX size={15} /></Button>
-                              )}
-                            </>
-                          )}
-                        </div>
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-32 text-center">
+                        <Loader2 className="animate-spin inline-block mr-2" style={{ color: navy }} size={20} />
                       </TableCell>
                     </TableRow>
-                  )) : (
-                    <TableRow><TableCell colSpan={7} className="h-32 text-center text-slate-400 italic">No staff registered yet.</TableCell></TableRow>
+                  ) : sortedAdmins.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-32 text-center text-slate-400 italic text-sm">
+                        No staff registered yet.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    sortedAdmins.map(admin => (
+                      <TableRow key={admin.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors" style={{ height: 64 }}>
+
+                        {/* Name */}
+                        <TableCell className="pl-5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs flex-shrink-0"
+                              style={{
+                                background: admin.role === 'super_admin' ? `${navy}12` : 'rgba(100,116,139,0.1)',
+                                color: admin.role === 'super_admin' ? navy : '#64748b',
+                              }}>
+                              {initials(admin)}
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-900 text-sm">{fullName(admin)}</p>
+                              {admin.program && (
+                                <p className="text-xs font-mono text-slate-400">{admin.program}</p>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+
+                        {/* Staff ID */}
+                        <TableCell>
+                          <span className="font-bold text-sm" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>
+                            {admin.id}
+                          </span>
+                        </TableCell>
+
+                        {/* Email */}
+                        <TableCell className="hidden sm:table-cell">
+                          <span className="text-xs text-slate-500 font-medium">{admin.email || '—'}</span>
+                        </TableCell>
+
+                        {/* Dept */}
+                        <TableCell>
+                          {admin.deptID ? (
+                            <span className="font-bold text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap"
+                              style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
+                              {admin.deptID}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300 text-xs">—</span>
+                          )}
+                        </TableCell>
+
+                        {/* Role badge — read-only, no toggle */}
+                        <TableCell>
+                          {admin.role === 'super_admin' ? (
+                            <Badge className="bg-primary/10 text-primary border-none text-[9px] uppercase tracking-widest px-2 py-1 rounded-full gap-1 font-bold">
+                              <BadgeCheck size={10} /> Super Admin
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-slate-400 border-slate-200 text-[9px] uppercase tracking-widest px-2 py-1 rounded-full gap-1 font-bold">
+                              <Shield size={10} /> Admin
+                            </Badge>
+                          )}
+                        </TableCell>
+
+                        {/* Actions — Revoke only, and only for non-super-admin targets */}
+                        <TableCell className="text-right pr-5">
+                          {/* Cannot revoke a super_admin; only super_admin actor can revoke regular admins */}
+                          {admin.role !== 'super_admin' && isSuperAdmin ? (
+                            <button
+                              onClick={() => { setStaffToRevoke({ id: admin.id, name: fullName(admin) }); setIsRevokeAlertOpen(true); }}
+                              title="Revoke admin access — set back to student"
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95"
+                              style={{ background: 'rgba(239,68,68,0.07)', color: '#dc2626', borderColor: 'rgba(239,68,68,0.2)' }}>
+                              <UserX size={13} /> Revoke
+                            </button>
+                          ) : (
+                            <span className="text-slate-200 text-xs font-medium">
+                              {admin.role === 'super_admin' ? 'Protected' : '—'}
+                            </span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
                   )}
                 </TableBody>
               </Table>
             </div>
+
+            {/* Footer note */}
+            <div className="px-5 py-3 border-t border-slate-100 text-xs font-medium text-slate-400">
+              To promote a student to Admin, the student must submit a <strong>Request Admin Privilege</strong> via the Credential Requests tab.
+              Super Admin status cannot be granted by anyone through the UI.
+            </div>
           </CardContent>
+        )}
       </Card>
 
       {/* Revoke alert */}
       <AlertDialog open={isRevokeAlertOpen} onOpenChange={setIsRevokeAlertOpen}>
-        <AlertDialogContent className="rounded-3xl">
+        <AlertDialogContent className="rounded-3xl p-6 w-[calc(100vw-2rem)] max-w-sm mx-auto">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-2xl font-headline font-bold text-destructive">Revoke Admin Access</AlertDialogTitle>
-            <AlertDialogDescription className="text-slate-600 text-lg">
+            <AlertDialogTitle className="text-lg font-bold text-red-600" style={{ fontFamily: "'Playfair Display',serif" }}>
+              Revoke Admin Access
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-slate-600 text-sm leading-relaxed">
               Revoke admin privileges for <strong>{staffToRevoke?.name}</strong>?
-              Their role will be set back to <strong>Student</strong> — account and logs are preserved.
+              Their role will be set back to <strong>Student</strong> — their account and all logs are preserved.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="pt-6">
-            <AlertDialogCancel className="rounded-xl font-bold">Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmRevoke} className="bg-destructive text-white rounded-xl font-bold px-8">
+          <AlertDialogFooter className="pt-4 flex-row gap-2">
+            <AlertDialogCancel className="flex-1 rounded-xl h-11 font-semibold text-sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmRevoke}
+              className="flex-1 rounded-xl h-11 font-semibold text-sm text-white"
+              style={{ background: 'linear-gradient(135deg,#dc2626,#b91c1c)' }}>
               Confirm Revoke
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </>
   );
 }

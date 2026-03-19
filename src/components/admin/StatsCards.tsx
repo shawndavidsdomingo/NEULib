@@ -21,19 +21,29 @@ export function StatsCards() {
 
   const [purposeFilter, setPurposeFilter] = useState('all');
   const [deptFilter,    setDeptFilter]    = useState('all');
+  const [programFilter, setProgramFilter] = useState('all');
   const [typeFilter,    setTypeFilter]    = useState('all');
 
   const logsRef     = useMemoFirebase(() => collection(db, 'library_logs'), [db]);
   const usersRef    = useMemoFirebase(() => query(collection(db, 'users')), [db]);
   const deptRef     = useMemoFirebase(() => collection(db, 'departments'), [db]);
-  // FIX: Load all purposes dynamically from Firestore (not a hardcoded array)
-  // Admin analytics show ALL purposes including hidden ones
+  const programsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
   const purposesRef = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
 
-  const { data: logs,     isLoading: logsLoading } = useCollection<LibraryLogRecord>(logsRef);
-  const { data: users                             } = useCollection<UserRecord>(usersRef);
-  const { data: depts                             } = useCollection<{ deptID: string; departmentName: string }>(deptRef);
-  const { data: purposeDocs                       } = useCollection<VisitPurpose>(purposesRef);
+  const { data: logs,       isLoading: logsLoading } = useCollection<LibraryLogRecord>(logsRef);
+  const { data: users                               } = useCollection<UserRecord>(usersRef);
+  const { data: depts                               } = useCollection<{ deptID: string; departmentName: string }>(deptRef);
+  const { data: allPrograms                         } = useCollection<{ id: string; deptID: string; code: string; name: string }>(programsRef);
+  const { data: purposeDocs                         } = useCollection<VisitPurpose>(purposesRef);
+
+  // Programs filtered by selected dept
+  const availablePrograms = useMemo(() => {
+    if (deptFilter === 'all' || !allPrograms) return [];
+    return allPrograms.filter(p => p.deptID === deptFilter).sort((a, b) => a.code.localeCompare(b.code));
+  }, [deptFilter, allPrograms]);
+
+  // Reset program when dept changes
+  const handleDeptChange = (v: string) => { setDeptFilter(v); setProgramFilter('all'); };
 
   // FIX: Build purpose list dynamically from Firestore — all purposes, including hidden
   const allPurposeLabels = useMemo(() => {
@@ -50,19 +60,20 @@ export function StatsCards() {
   const filteredLogs = useMemo(() => {
     if (!logs) return [];
     return logs.filter(l => {
-      const matchPurpose = purposeFilter === 'all' || l.purpose === purposeFilter;
-      const matchDept    = deptFilter    === 'all' || l.deptID   === deptFilter;
-      let   matchType    = true;
+      const matchPurpose  = purposeFilter  === 'all' || l.purpose === purposeFilter;
+      const matchDept     = deptFilter     === 'all' || l.deptID  === deptFilter;
+      const matchProgram  = programFilter  === 'all' || !(l as any).program || (l as any).program === programFilter;
+      let   matchType     = true;
       if (typeFilter !== 'all') {
         const u = userMap[l.studentId];
         if (typeFilter === 'student') matchType = !u || u.role === 'student' || u.role === 'visitor';
         if (typeFilter === 'staff')   matchType = !!u && (u.role === 'admin' || u.role === 'super_admin');
       }
-      return matchPurpose && matchDept && matchType;
+      return matchPurpose && matchDept && matchProgram && matchType;
     });
-  }, [logs, purposeFilter, deptFilter, typeFilter, userMap]);
+  }, [logs, purposeFilter, deptFilter, programFilter, typeFilter, userMap]);
 
-  const isFiltered = purposeFilter !== 'all' || deptFilter !== 'all' || typeFilter !== 'all';
+  const isFiltered = purposeFilter !== 'all' || deptFilter !== 'all' || programFilter !== 'all' || typeFilter !== 'all';
 
   const stats = useMemo(() => {
     const todayCount = filteredLogs.filter(l => isToday(parseISO(l.checkInTimestamp))).length;
@@ -112,9 +123,8 @@ export function StatsCards() {
         </Select>
 
         {/* FIX: Dept dropdown shows full name in list, but only code after selection */}
-        <Select value={deptFilter} onValueChange={setDeptFilter}>
+        <Select value={deptFilter} onValueChange={handleDeptChange}>
           <SelectTrigger className="h-8 w-36 bg-white rounded-xl border-slate-200 font-semibold text-xs">
-            {/* Show only the code (deptID) in the trigger after selection */}
             <span className="truncate font-bold text-xs">
               {deptFilter === 'all' ? 'All Colleges' : deptFilter}
             </span>
@@ -125,6 +135,25 @@ export function StatsCards() {
               <SelectItem key={d.deptID} value={d.deptID} className="text-xs font-semibold">
                 <span className="font-bold mr-1" style={{ color: 'hsl(221,72%,22%)' }}>[{d.deptID}]</span>
                 {d.departmentName}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {/* Program — only active when dept is selected */}
+        <Select value={programFilter} onValueChange={setProgramFilter} disabled={deptFilter === 'all'}>
+          <SelectTrigger className="h-8 w-36 bg-white rounded-xl border-slate-200 font-semibold text-xs disabled:opacity-50">
+            <span className="truncate font-bold text-xs">
+              {programFilter === 'all' ? (deptFilter === 'all' ? 'Program' : 'All Programs') : programFilter}
+            </span>
+          </SelectTrigger>
+          <SelectContent className="rounded-xl max-h-60">
+            <SelectItem value="all" className="text-xs font-semibold">All Programs</SelectItem>
+            {availablePrograms.map(p => (
+              <SelectItem key={p.code} value={p.code} className="text-xs font-semibold">
+                <span className="font-bold mr-1 whitespace-nowrap inline-block" style={{ color: 'hsl(221,72%,22%)', fontFamily: "'DM Mono',monospace" }}>{p.code}</span>
+                {' '}{p.name}
+                {p.name}
               </SelectItem>
             ))}
           </SelectContent>

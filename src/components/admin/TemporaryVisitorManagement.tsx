@@ -13,6 +13,7 @@ import { useFirestore, useCollection, useMemoFirebase, deleteDocumentNonBlocking
 import { collection, doc, query, where, getDocs, setDoc } from 'firebase/firestore';
 import { UserRecord, DepartmentRecord, ProgramRecord } from '@/lib/firebase-schema';
 import { format } from 'date-fns';
+import { SuccessCard } from '@/components/ui/SuccessCard';
 
 interface Props { isSuperAdmin?: boolean | null; }
 
@@ -20,11 +21,16 @@ const navy = 'hsl(221,72%,22%)';
 
 export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
   const [search, setSearch] = useState('');
+  const [deptFilter,    setDeptFilter]    = useState('all');
+  const [programFilter, setProgramFilter] = useState('all');
+  const [sortField,     setSortField]     = useState<'name' | 'date' | 'dept'>('date');
+  const [sortDir,       setSortDir]       = useState<'asc' | 'desc'>('desc');
   const [editingVisitor,   setEditingVisitor]   = useState<UserRecord | null>(null);
   const [isEditOpen,       setIsEditOpen]       = useState(false);
   const [visitorToDelete,  setVisitorToDelete]  = useState<UserRecord | null>(null);
   const [isDeleteOpen,     setIsDeleteOpen]     = useState(false);
   const [isApproving,      setIsApproving]      = useState<string | null>(null);
+  const [successCard,      setSuccessCard]      = useState<{ title: string; description: string; color?: 'green' | 'navy' | 'amber' } | null>(null);
 
   // Edit form fields
   const [editFirstName,  setEditFirstName]  = useState('');
@@ -38,6 +44,14 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
 
   const deptRef     = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: dbDepartments } = useCollection<DepartmentRecord>(deptRef);
+
+  // All programs (for filter dropdown — scoped to selected dept)
+  const allProgramsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
+  const { data: allPrograms } = useCollection<ProgramRecord>(allProgramsRef);
+  const availablePrograms = useMemo(() => {
+    if (deptFilter === 'all' || !allPrograms) return [];
+    return allPrograms.filter(p => p.deptID === deptFilter).sort((a, b) => a.code.localeCompare(b.code));
+  }, [deptFilter, allPrograms]);
 
   const programsRef = useMemoFirebase(
     () => editDeptId ? query(collection(db, 'programs'), where('deptID', '==', editDeptId)) : null,
@@ -54,16 +68,32 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
   const { data: visitors, isLoading } = useCollection<UserRecord>(visitorsRef);
 
   const filtered = useMemo(() => {
-    const list = (visitors || []).sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
-    if (!search.trim()) return list;
-    const s = search.toLowerCase();
-    return list.filter(v =>
-      `${v.firstName} ${v.lastName}`.toLowerCase().includes(s) ||
-      (v.email || '').toLowerCase().includes(s) ||
-      (v.id || '').toLowerCase().includes(s) ||
-      (v.deptID || '').toLowerCase().includes(s)
-    );
-  }, [visitors, search]);
+    let list = (visitors || []);
+    // Search
+    if (search.trim()) {
+      const s = search.toLowerCase();
+      list = list.filter(v =>
+        `${v.firstName} ${v.lastName}`.toLowerCase().includes(s) ||
+        (v.email || '').toLowerCase().includes(s) ||
+        (v.id || '').toLowerCase().includes(s) ||
+        (v.deptID || '').toLowerCase().includes(s)
+      );
+    }
+    // Dept filter
+    if (deptFilter !== 'all') list = list.filter(v => v.deptID === deptFilter);
+    // Program filter
+    if (programFilter !== 'all') list = list.filter(v => v.program === programFilter);
+    // Sort
+    list = [...list].sort((a, b) => {
+      let va = '', vb = '';
+      if (sortField === 'name') { va = `${a.lastName}${a.firstName}`; vb = `${b.lastName}${b.firstName}`; }
+      else if (sortField === 'dept') { va = a.deptID || ''; vb = b.deptID || ''; }
+      else { va = a.addedAt || ''; vb = b.addedAt || ''; }
+      const cmp = va.localeCompare(vb);
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return list;
+  }, [visitors, search, deptFilter, programFilter, sortField, sortDir]);
 
   const openEdit = (v: UserRecord) => {
     setEditingVisitor(v);
@@ -108,7 +138,11 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
         });
       });
 
-      toast({ title: 'Student Activated', description: `${v.firstName} ${v.lastName} is now a verified student.` });
+      setSuccessCard({
+        title: 'Student Activated!',
+        description: `${v.firstName} ${v.lastName} is now a verified student with full library access.`,
+        color: 'green',
+      });
     } catch {
       toast({ title: 'Promotion Failed', variant: 'destructive' });
     } finally {
@@ -126,45 +160,109 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
       program:    editProgram,
     });
     setIsEditOpen(false);
-    toast({ title: 'Record Updated' });
+    setSuccessCard({ title: 'Record Updated', description: 'The visitor profile has been saved successfully.', color: 'navy' });
   };
 
   const confirmDelete = () => {
     if (!visitorToDelete) return;
     deleteDocumentNonBlocking(doc(db, 'users', visitorToDelete.id));
-    toast({ title: 'Visitor Removed' });
+    setSuccessCard({ title: 'Visitor Removed', description: 'The pending visitor record has been deleted.', color: 'amber' });
     setIsDeleteOpen(false);
   };
 
   const thStyle = "text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 py-3";
 
   return (
+    <>
+      {successCard && (
+        <SuccessCard
+          title={successCard.title}
+          description={successCard.description}
+          color={successCard.color}
+          onClose={() => setSuccessCard(null)}
+        />
+      )}
     <div className="space-y-4">
       {/* Header card */}
       <div className="school-card overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl text-white" style={{ background: navy }}>
-              <Clock size={17} />
+        <div className="px-5 py-4 border-b border-slate-100 space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl text-white" style={{ background: navy }}>
+                <Clock size={17} />
+              </div>
+              <div>
+                <h3 className="font-bold text-slate-900 text-xl" style={{ fontFamily: "'Playfair Display',serif" }}>
+                  Pending Visitors
+                </h3>
+                <p className="text-slate-400 text-sm font-medium mt-0.5">
+                  {filtered.length} awaiting verification
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-bold text-slate-900 text-xl" style={{ fontFamily: "'Playfair Display',serif" }}>
-                Pending Visitors
-              </h3>
-              <p className="text-slate-400 text-sm font-medium mt-0.5">
-                {filtered.length} awaiting verification
-              </p>
+            {/* Search */}
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <Input
+                placeholder="Search name, ID, email..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-9 h-9 w-52 bg-slate-50 border-slate-200 rounded-xl text-sm"
+              />
             </div>
           </div>
-          {/* Search */}
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <Input
-              placeholder="Search name, ID, email..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="pl-9 h-9 w-52 bg-slate-50 border-slate-200 rounded-xl text-sm"
-            />
+
+          {/* Filter row */}
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Dept */}
+            <Select value={deptFilter} onValueChange={v => { setDeptFilter(v); setProgramFilter('all'); }}>
+              <SelectTrigger className="h-8 w-36 bg-slate-50 border-slate-200 rounded-xl text-xs font-bold">
+                <span>{deptFilter === 'all' ? 'All Colleges' : deptFilter}</span>
+              </SelectTrigger>
+              <SelectContent className="rounded-xl max-h-60">
+                <SelectItem value="all" className="text-xs font-semibold">All Colleges</SelectItem>
+                {(dbDepartments || []).sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
+                  <SelectItem key={d.deptID} value={d.deptID} className="text-xs font-semibold">
+                    <span className="font-bold mr-1" style={{ color: navy }}>[{d.deptID}]</span>{d.departmentName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* Program */}
+            <Select value={programFilter} onValueChange={setProgramFilter} disabled={deptFilter === 'all' || availablePrograms.length === 0}>
+              <SelectTrigger className="h-8 w-36 bg-slate-50 border-slate-200 rounded-xl text-xs font-bold disabled:opacity-50">
+                <span>{programFilter === 'all' ? 'All Programs' : programFilter}</span>
+              </SelectTrigger>
+              <SelectContent className="rounded-xl max-h-60">
+                <SelectItem value="all" className="text-xs font-semibold">All Programs</SelectItem>
+                {availablePrograms.map(p => (
+                  <SelectItem key={p.code} value={p.code} className="text-xs font-semibold">
+                    <span className="font-bold mr-1 whitespace-nowrap inline-block" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>{p.code}</span>{' '}{p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* Sort */}
+            <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100 ml-auto">
+              {([
+                { f: 'date' as const, label: 'Date' },
+                { f: 'name' as const, label: 'Name' },
+                { f: 'dept' as const, label: 'Dept' },
+              ]).map(opt => (
+                <button key={opt.f}
+                  onClick={() => {
+                    if (sortField === opt.f) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+                    else { setSortField(opt.f); setSortDir('asc'); }
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1"
+                  style={sortField === opt.f ? { background: navy, color: 'white' } : { color: '#64748b' }}>
+                  {opt.label}
+                  {sortField === opt.f && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -422,5 +520,6 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </>
   );
 }

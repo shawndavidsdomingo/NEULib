@@ -79,23 +79,23 @@ export interface LibraryLogRecord {
 // ── Static reference data ───────────────────────────────────────────────────
 
 export const DEPARTMENTS: Record<string, string> = {
-  LIBRARY:  'Library',  // for staff/faculty who don't belong to a specific dept
-  ABM:  'College of Accountancy',
-  COA:  'College of Agriculture',
-  CAS:  'College of Arts and Sciences',
-  CBA:  'College of Business Administration',
-  COC:  'College of Communication',
-  CICS: 'College of Informatics and Computing Studies',
-  CRIM: 'College of Criminology',
-  CED:  'College of Education',
-  CEA:  'College of Engineering and Architecture',
-  CMT:  'College of Medical Technology',
-  COM:  'College of Midwifery',
-  COMS: 'College of Music',
-  CON:  'College of Nursing',
-  CPT:  'College of Physical Therapy',
-  CRT:  'College of Respiratory Therapy',
-  SOIR: 'School of International Relations'
+  LIBRARY: 'Library', // for staff/faculty who don't belong to a specific dept
+  ABM:     'College of Accountancy',
+  CAS:     'College of Arts and Sciences',
+  CBA:     'College of Business Administration',
+  CEA:     'College of Engineering and Architecture',
+  CED:     'College of Education',
+  CICS:    'College of Informatics and Computing Studies',
+  CMT:     'College of Medical Technology',
+  COA:     'College of Agriculture',
+  COC:     'College of Communication',
+  COM:     'College of Midwifery',
+  COMS:    'College of Music',
+  CON:     'College of Nursing',
+  CPT:     'College of Physical Therapy',
+  CRIM:    'College of Criminology',
+  CRT:     'College of Respiratory Therapy',
+  SOIR:    'School of International Relations'
 };
 
 export const DEPARTMENT_LIST = Object.entries(DEPARTMENTS).map(([deptID, departmentName]) => ({ deptID, departmentName }));
@@ -107,13 +107,8 @@ export const PROGRAMS: Record<string, ProgramEntry[]> = {
 
   ABM: [
     { code: 'ABM-STAFF', name: 'Staff/Faculty' },
-    { code: 'BSA', name: 'Bachelor of Science in Accountancy' },
     { code: 'BSAIS', name: 'Bachelor of Science in Accounting Information System' },
-  ],
-
-  COA: [
-    { code: 'COA-STAFF', name: 'Staff/Faculty' },
-    { code: 'BSAgri', name: 'Bachelor of Science in Agriculture' },
+    { code: 'BSA', name: 'Bachelor of Science in Accountancy' },
   ],
 
   CAS: [
@@ -124,22 +119,40 @@ export const PROGRAMS: Record<string, ProgramEntry[]> = {
     { code: 'BSBio', name: 'Bachelor of Science in Biology' },
     { code: 'BSPsych', name: 'Bachelor of Science in Psychology' },
   ],
-  
+
   CBA: [
     { code: 'CBA-STAFF', name: 'Staff/Faculty' },
-    { code: 'BSEntrep', name: 'Bachelor of Science in Entrepreneurship' },
     { code: 'BSBA-FM', name: 'Bachelor of Science in Business Administration Major in Financial Management' },
     { code: 'BSBA-HRDM', name: 'Bachelor of Science in Business Administration Major in Human Resource Development Management' },
     { code: 'BSBA-LM', name: 'Bachelor of Science in Business Administration Major in Legal Management' },
     { code: 'BSBA-MM', name: 'Bachelor of Science in Business Administration Major in Marketing Management' },
+    { code: 'BSEntrep', name: 'Bachelor of Science in Entrepreneurship' },
     { code: 'BSREM', name: 'Bachelor of Science in Real Estate Management' },
   ],
-  
-  COC: [
-    { code: 'COC-STAFF', name: 'Staff/Faculty' },
-    { code: 'BABroadcast', name: 'Bachelor of Arts in Broadcasting' },
-    { code: 'BAComm', name: 'Bachelor of Arts in Communication' },
-    { code: 'BAJournalism', name: 'Bachelor of Arts in Journalism' },
+
+  CEA: [
+    { code: 'CEA-STAFF', name: 'Staff/Faculty' },
+    { code: 'BSArch', name: 'Bachelor of Science in Architecture' },
+    { code: 'BSAstro', name: 'Bachelor of Science in Astronomy' },
+    { code: 'BSCE', name: 'Bachelor of Science in Civil Engineering' },
+    { code: 'BSEE', name: 'Bachelor of Science in Electrical Engineering' },
+    { code: 'BSECE', name: 'Bachelor of Science in Electronics Engineering' },
+    { code: 'BSIE', name: 'Bachelor of Science in Industrial Engineering' },
+    { code: 'BSME', name: 'Bachelor of Science in Mechanical Engineering' },
+  ],
+
+  CED: [
+    { code: 'CED-STAFF', name: 'Staff/Faculty' },
+    { code: 'BEEd', name: 'Bachelor of Elementary Education' },
+    { code: 'BEEd-Preschool', name: 'Bachelor of Elementary Education with Specialization in Preschool Education' },
+    { code: 'BEEd-SpEd', name: 'Bachelor of Elementary Education with Specialization in Special Education' },
+    { code: 'BSEd-English', name: 'Bachelor of Secondary Education Major in English' },
+    { code: 'BSEd-Filipino', name: 'Bachelor of Secondary Education Major in Filipino' },
+    { code: 'BSEd-Math', name: 'Bachelor of Secondary Education Major in Mathematics' },
+    { code: 'BSEd-MAPE', name: 'Bachelor of Secondary Education Major in Music, Arts, and Physical Education' },
+    { code: 'BSEd-Science', name: 'Bachelor of Secondary Education Major in Science' },
+    { code: 'BSEd-SocStud', name: 'Bachelor of Secondary Education Major in Social Studies' },
+    { code: 'BSEd-TLE', name: 'Bachelor of Secondary Education Major in Technology and Livelihood Education' },
   ],
 
   CICS: [
@@ -151,47 +164,29 @@ export const PROGRAMS: Record<string, ProgramEntry[]> = {
     { code: 'BSIS', name: 'Bachelor of Science in Information System' },
     { code: 'BSIT', name: 'Bachelor of Science in Information Technology' },
   ],
-  
-  CRIM: [
-    { code: 'CRIM-STAFF', name: 'Staff/Faculty' },
-    { code: 'BSCrim', name: 'Bachelor of Science in Criminology' },
-  ],
 
-  CED: [
-    { code: 'CED-STAFF', name: 'Staff/Faculty' },
-    { code: 'BEEd', name: 'Bachelor of Elementary Education' },
-    { code: 'BEEd-Preschool', name: 'Bachelor of Elementary Education with Specialization in Preschool Education' },
-    { code: 'BEEd-SpEd', name: 'Bachelor of Elementary Education with Specialization in Special Education' },
-    { code: 'BSEd-English', name: 'Bachelor of Secondary Education Major in English' },
-    { code: 'BSEd-Filipino', name: 'Bachelor of Secondary Education Major in Filipino' },
-    { code: 'BSEd-MAPE', name: 'Bachelor of Secondary Education Major in Music, Arts, and Physical Education' },
-    { code: 'BSEd-Math', name: 'Bachelor of Secondary Education Major in Mathematics' },
-    { code: 'BSEd-Science', name: 'Bachelor of Secondary Education Major in Science' },
-    { code: 'BSEd-SocStud', name: 'Bachelor of Secondary Education Major in Social Studies' },
-    { code: 'BSEd-TLE', name: 'Bachelor of Secondary Education Major in Technology and Livelihood Education' },
-  ],
-  
-  CEA: [
-    { code: 'CEA-STAFF', name: 'Staff/Faculty' },
-    { code: 'BSArch', name: 'Bachelor of Science in Architecture' },
-    { code: 'BSAstro', name: 'Bachelor of Science in Astronomy' },
-    { code: 'BSCE', name: 'Bachelor of Science in Civil Engineering' },
-    { code: 'BSECE', name: 'Bachelor of Science in Electronics Engineering' },
-    { code: 'BSEE', name: 'Bachelor of Science in Electrical Engineering' },
-    { code: 'BSIE', name: 'Bachelor of Science in Industrial Engineering' },
-    { code: 'BSME', name: 'Bachelor of Science in Mechanical Engineering' },
-  ],
-  
   CMT: [
     { code: 'CMT-STAFF', name: 'Staff/Faculty' },
     { code: 'BSMT', name: 'Bachelor of Science in Medical Technology' },
   ],
-  
+
+  COA: [
+    { code: 'COA-STAFF', name: 'Staff/Faculty' },
+    { code: 'BSAgri', name: 'Bachelor of Science in Agriculture' },
+  ],
+
+  COC: [
+    { code: 'COC-STAFF', name: 'Staff/Faculty' },
+    { code: 'BABroadcast', name: 'Bachelor of Arts in Broadcasting' },
+    { code: 'BAComm', name: 'Bachelor of Arts in Communication' },
+    { code: 'BAJournalism', name: 'Bachelor of Arts in Journalism' },
+  ],
+
   COM: [
     { code: 'COM-STAFF', name: 'Staff/Faculty' },
     { code: 'DM', name: 'Diploma in Midwifery' },
   ],
-  
+
   COMS: [
     { code: 'COMS-STAFF', name: 'Staff/Faculty' },
     { code: 'BM-Choral', name: 'Bachelor of Music in Choral Conducting' },
@@ -199,22 +194,27 @@ export const PROGRAMS: Record<string, ProgramEntry[]> = {
     { code: 'BM-Piano', name: 'Bachelor of Music in Piano' },
     { code: 'BM-Voice', name: 'Bachelor of Music in Voice' },
   ],
-  
+
   CON: [
     { code: 'CON-STAFF', name: 'Staff/Faculty' },
     { code: 'BSN', name: 'Bachelor of Science in Nursing' },
   ],
-  
+
   CPT: [
     { code: 'CPT-STAFF', name: 'Staff/Faculty' },
     { code: 'BSPT', name: 'Bachelor of Science in Physical Therapy' },
   ],
-  
+
+  CRIM: [
+    { code: 'CRIM-STAFF', name: 'Staff/Faculty' },
+    { code: 'BSCrim', name: 'Bachelor of Science in Criminology' },
+  ],
+
   CRT: [
     { code: 'CRT-STAFF', name: 'Staff/Faculty' },
     { code: 'BSRT', name: 'Bachelor of Science in Respiratory Therapy' },
   ],
-  
+
   SOIR: [
     { code: 'SOIR-STAFF', name: 'Staff/Faculty' },
     { code: 'BAFS', name: 'Bachelor of Arts in Foreign Service' },

@@ -19,6 +19,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useFirestore, useCollection, useMemoFirebase, deleteDocumentNonBlocking } from '@/firebase';
 import { collection, doc } from 'firebase/firestore';
 import { LibraryLogRecord, DepartmentRecord, ProgramRecord } from '@/lib/firebase-schema';
+import { SuccessCard } from '@/components/ui/SuccessCard';
 
 const PRESETS = [
   { label: 'Today',      getStart: () => format(new Date(), 'yyyy-MM-dd'),                             getEnd: () => format(new Date(), 'yyyy-MM-dd') },
@@ -51,9 +52,11 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
   const [purposeFilter, setPurposeFilter] = useState('All Purposes');
   const [aiSummary,     setAiSummary]     = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [aiCollapsed,   setAiCollapsed]   = useState(false);
   const [logToDelete,   setLogToDelete]   = useState<{ id: string; name: string } | null>(null);
   const [isDeleteAlertOpen, setIsDeleteAlertOpen] = useState(false);
   const [filtersOpen,   setFiltersOpen]   = useState(true);
+  const [successCard,   setSuccessCard]   = useState<{ title: string; description: string; color?: 'green' | 'navy' | 'amber' } | null>(null);
   const [topVisitorsOpen,  setTopVisitorsOpen]  = useState(true);
   const [tapOutFilter,  setTapOutFilter]  = useState<'all' | 'no_tap' | 'with_timeout'>('all');
   const [archiveSearch,    setArchiveSearch]    = useState('');
@@ -81,6 +84,16 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
 
   const deptQuery = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: dbDepartments } = useCollection<DepartmentRecord>(deptQuery);
+
+  const usersRef = useMemoFirebase(() => collection(db, 'users'), [db]);
+  const { data: allUsers } = useCollection<{ id: string; program?: string; deptID?: string }>(usersRef);
+
+  // Map studentId → program code (for enriching log rows)
+  const userProgramMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    (allUsers || []).forEach(u => { if (u.id && u.program) m[u.id] = u.program; });
+    return m;
+  }, [allUsers]);
 
   const deptNameMap = useMemo(() => {
     const m: Record<string, string> = {};
@@ -119,12 +132,10 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       const inTapOut = tapOutFilter === 'all'
         || (tapOutFilter === 'with_timeout' && !!l.checkOutTimestamp)
         || (tapOutFilter === 'no_tap'       && !l.checkOutTimestamp);
-      // Program filter is based on code — since logs don't store program,
-      // we skip program filtering at log level (filter is for export context display)
-      const inProgram = true; // program shown in filter label only
-      return inRange && inDept && inPurpose;
+      const inProgram = programFilter === 'All Programs' || userProgramMap[l.studentId] === programFilter;
+      return inRange && inDept && inPurpose && inTapOut && inProgram;
     }).sort((a, b) => b.checkInTimestamp.localeCompare(a.checkInTimestamp)),
-    [allLogs, startDate, endDate, deptFilter, purposeFilter, programFilter, tapOutFilter]
+    [allLogs, startDate, endDate, deptFilter, purposeFilter, programFilter, tapOutFilter, userProgramMap]
   );
 
   const displayedLogs = useMemo(() => {
@@ -249,9 +260,9 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
 
   const generateAiSummary = async () => {
     if (!filteredLogs.length) return;
-    setIsGeneratingAi(true); setAiSummary(null);
+    setIsGeneratingAi(true); setAiSummary(null); setAiCollapsed(false);
     try {
-      const res = await fetch('/NEULib/api/ai-summary', {
+      const res = await fetch('/api/ai-summary', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           startDate, endDate,
@@ -282,7 +293,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
   const confirmDeleteLog = () => {
     if (!isSuperAdmin || !logToDelete) return;
     deleteDocumentNonBlocking(doc(db, 'library_logs', logToDelete.id));
-    toast({ title: "Log Removed" });
+    setSuccessCard({ title: 'Log Removed', description: `The session record for ${logToDelete.name} has been permanently deleted.`, color: 'amber' });
     setIsDeleteAlertOpen(false); setLogToDelete(null);
   };
 
@@ -344,10 +355,19 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
     a.download = `NEU_Library_Sessions_${startDate}_${endDate}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    toast({ title: 'CSV Exported', description: `${filteredLogs.length} session records downloaded.` });
+    setSuccessCard({ title: 'CSV Exported', description: `${filteredLogs.length} session records downloaded successfully.`, color: 'navy' });
   };
 
   return (
+    <>
+      {successCard && (
+        <SuccessCard
+          title={successCard.title}
+          description={successCard.description}
+          color={successCard.color}
+          onClose={() => setSuccessCard(null)}
+        />
+      )}
     <div className="space-y-4" style={{ fontFamily: "'DM Sans',sans-serif" }}>
 
       {/* ── Filter Card ── */}
@@ -396,23 +416,35 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
 
             {/* Dept + Program + Purpose filters */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* College */}
+              {/* College — format: DeptID - Full Name */}
               <div>
                 <p className="text-slate-400 font-semibold text-xs mb-1.5 uppercase tracking-wide">College</p>
                 <Select value={deptFilter} onValueChange={handleDeptChange}>
                   <SelectTrigger className="h-11 rounded-xl bg-slate-50 border-slate-200 font-semibold text-sm">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent className="rounded-xl">
+                  <SelectContent className="rounded-xl max-h-64">
                     <SelectItem value="All Departments" className="font-semibold text-sm">All Colleges</SelectItem>
-                    {dbDepartments?.map(d => (
-                      <SelectItem key={d.deptID} value={d.deptID} className="font-semibold text-sm">{d.departmentName}</SelectItem>
-                    ))}
+                    {(dbDepartments || [])
+                      .sort((a, b) => {
+                        // Pin LIBRARY/STAFF to top
+                        const aStaff = a.deptID === 'LIBRARY' || a.deptID === 'STAFF';
+                        const bStaff = b.deptID === 'LIBRARY' || b.deptID === 'STAFF';
+                        if (aStaff && !bStaff) return -1;
+                        if (!aStaff && bStaff) return 1;
+                        return a.deptID.localeCompare(b.deptID);
+                      })
+                      .map(d => (
+                        <SelectItem key={d.deptID} value={d.deptID} className="font-semibold text-sm">
+                          <span className="font-bold mr-1" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>{d.deptID}</span>
+                          {' - '}{d.departmentName}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* Program — only active when dept selected */}
+              {/* Program — STAFF codes pinned first, then Code - Full Title */}
               <div>
                 <p className="text-slate-400 font-semibold text-xs mb-1.5 uppercase tracking-wide">Program</p>
                 <Select
@@ -425,15 +457,20 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                   </SelectTrigger>
                   <SelectContent className="rounded-xl max-h-64">
                     <SelectItem value="All Programs" className="font-semibold text-sm">All Programs</SelectItem>
-                    {availablePrograms.map(prog => (
-                      <SelectItem key={prog.code} value={prog.code} className="font-semibold text-sm py-2">
-                        <span className="font-bold mr-2 text-xs px-1.5 py-0.5 rounded"
-                          style={{ background: `${navy}08`, color: navy, fontFamily: "'DM Mono',monospace" }}>
-                          {prog.code}
-                        </span>
-                        {prog.name}
-                      </SelectItem>
-                    ))}
+                    {[...availablePrograms]
+                      .sort((a, b) => {
+                        const aStaff = a.code.toUpperCase().includes('STAFF');
+                        const bStaff = b.code.toUpperCase().includes('STAFF');
+                        if (aStaff && !bStaff) return -1;
+                        if (!aStaff && bStaff) return 1;
+                        return a.code.localeCompare(b.code);
+                      })
+                      .map(prog => (
+                        <SelectItem key={prog.code} value={prog.code} className="font-semibold text-sm py-2">
+                          <span className="font-bold mr-1 whitespace-nowrap inline-block" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>{prog.code}</span>
+                          {' - '}{prog.name}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -496,22 +533,41 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
 
       {/* ── AI Summary ── */}
       {(aiSummary !== null || isGeneratingAi) && (
-        <div style={{ ...card, background: 'rgba(255,255,255,0.98)' }} className="p-5">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="p-2.5 rounded-xl text-white" style={{ background: navyBtn.background }}>
+        <div style={{ ...card, background: 'rgba(255,255,255,0.98)' }} className="overflow-hidden">
+          {/* Entire header row is clickable to toggle collapse */}
+          <button
+            className="w-full flex items-center gap-3 px-5 py-4 text-left hover:bg-slate-50 transition-colors border-b border-slate-100"
+            onClick={() => setAiCollapsed(c => !c)}
+          >
+            <div className="p-2.5 rounded-xl text-white flex-shrink-0" style={{ background: navyBtn.background }}>
               <Sparkles size={15} />
             </div>
-            <h4 className="font-bold text-slate-900 text-xl" style={{ fontFamily: "'Playfair Display',serif" }}>
+            <h4 className="font-bold text-slate-900 text-xl flex-1" style={{ fontFamily: "'Playfair Display',serif" }}>
               AI Generated Insights
             </h4>
-          </div>
-          {isGeneratingAi ? (
-            <div className="flex items-center gap-3 py-4">
-              <Loader2 size={20} className="animate-spin" style={{ color: navy }} />
-              <p className="text-slate-500 text-sm font-medium">Analyzing {filteredLogs.length} records...</p>
+            {aiCollapsed
+              ? <ChevronDown size={16} className="text-slate-400 flex-shrink-0" />
+              : <ChevronUp   size={16} className="text-slate-400 flex-shrink-0" />}
+            {/* X closes entirely — stopPropagation so it doesn't also toggle */}
+            <span
+              role="button"
+              onClick={e => { e.stopPropagation(); setAiSummary(null); setAiCollapsed(false); }}
+              title="Close"
+              className="ml-1 p-1.5 rounded-lg hover:bg-red-50 hover:text-red-400 text-slate-300 transition-colors text-lg leading-none font-bold">
+              ×
+            </span>
+          </button>
+          {!aiCollapsed && (
+            <div className="p-5">
+              {isGeneratingAi ? (
+                <div className="flex items-center gap-3 py-4">
+                  <Loader2 size={20} className="animate-spin" style={{ color: navy }} />
+                  <p className="text-slate-500 text-sm font-medium">Analyzing {filteredLogs.length} records...</p>
+                </div>
+              ) : (
+                <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-line">{aiSummary}</p>
+              )}
             </div>
-          ) : (
-            <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-line">{aiSummary}</p>
           )}
         </div>
       )}
@@ -621,8 +677,8 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                 <TableRow className="h-11 border-slate-100">
                   <TableHead className="pl-5 text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('studentName')}>Student <ArchiveSortIcon field="studentName" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden sm:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('studentId')}>Student ID <ArchiveSortIcon field="studentId" /></TableHead>
-                  <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden lg:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('program')}>Program <ArchiveSortIcon field="program" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('deptID')}>Dept <ArchiveSortIcon field="deptID" /></TableHead>
+                  <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden lg:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('program')}>Program <ArchiveSortIcon field="program" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden sm:table-cell cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('purpose')}>Purpose <ArchiveSortIcon field="purpose" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 cursor-pointer hover:bg-slate-100 select-none" onClick={() => toggleArchiveSort('checkInTimestamp')}>Time In <ArchiveSortIcon field="checkInTimestamp" /></TableHead>
                   <TableHead className="text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 hidden md:table-cell">Time Out</TableHead>
@@ -659,20 +715,20 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                         </span>
                       </TableCell>
 
-                      {/* Dept */}
+                      {/* Dept — col 3 */}
                       <TableCell>
-                        <span className="font-bold text-xs px-2.5 py-1.5 rounded-lg"
+                        <span className="font-bold text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap"
                           style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
-                          {l.deptID}
+                          {l.deptID || '—'}
                         </span>
                       </TableCell>
 
-                      {/* Program */}
+                      {/* Program — col 4, resolved from users collection */}
                       <TableCell className="hidden lg:table-cell">
-                        {(l as any).program ? (
-                          <span className="text-xs font-bold px-2.5 py-1.5 rounded-lg"
+                        {userProgramMap[l.studentId] ? (
+                          <span className="text-xs font-bold px-2.5 py-1.5 rounded-lg whitespace-nowrap"
                             style={{ background: 'hsl(262,83%,58%,0.08)', color: 'hsl(262,83%,45%)', fontFamily: "'DM Mono',monospace" }}>
-                            {(l as any).program}
+                            {userProgramMap[l.studentId]}
                           </span>
                         ) : <span className="text-slate-300 text-xs">—</span>}
                       </TableCell>
@@ -709,27 +765,19 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                         </span>
                       </TableCell>
 
-                      {/* Status + delete */}
+                      {/* Status — read-only, no delete */}
                       <TableCell className="text-right pr-5">
-                        <div className="flex items-center justify-end gap-2">
-                          {l.checkOutTimestamp ? (
-                            <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-500">Done</span>
-                          ) : noTap ? (
-                            <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: 'rgba(239,68,68,0.08)', color: '#ef4444' }}>No Tap</span>
-                          ) : (
-                            <span className="text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1"
-                              style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse inline-block" />
-                              Active
-                            </span>
-                          )}
-                          {isSuperAdmin && (
-                            <button onClick={() => { setLogToDelete({ id: l.id, name: l.studentName || 'Student' }); setIsDeleteAlertOpen(true); }}
-                              className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all active:scale-95">
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </div>
+                        {l.checkOutTimestamp ? (
+                          <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-500">Done</span>
+                        ) : noTap ? (
+                          <span className="text-xs font-bold px-2.5 py-1 rounded-full" style={{ background: 'rgba(239,68,68,0.08)', color: '#ef4444' }}>No Tap</span>
+                        ) : (
+                          <span className="text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1"
+                            style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6' }}>
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse inline-block" />
+                            Active
+                          </span>
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -740,23 +788,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         )}
       </div>
 
-      {/* Delete Dialog */}
-      {isSuperAdmin && (
-        <AlertDialog open={isDeleteAlertOpen} onOpenChange={setIsDeleteAlertOpen}>
-          <AlertDialogContent className="rounded-2xl p-6 w-[calc(100vw-2rem)] max-w-sm mx-auto border-red-100">
-            <AlertDialogHeader>
-              <AlertDialogTitle className="text-red-600 font-bold text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>Delete Log</AlertDialogTitle>
-              <AlertDialogDescription className="text-slate-600 text-sm leading-relaxed">
-                Remove record for <strong>{logToDelete?.name}</strong>? This cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter className="pt-4 flex-row gap-2">
-              <AlertDialogCancel className="flex-1 rounded-xl h-11 font-semibold text-sm">Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={confirmDeleteLog} className="flex-1 bg-red-600 text-white rounded-xl h-11 font-semibold text-sm">Delete</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
     </div>
+    </>
   );
 }

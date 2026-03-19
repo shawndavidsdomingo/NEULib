@@ -8,7 +8,7 @@ import { format, parseISO, isToday, differenceInMinutes, startOfDay } from 'date
 import { Loader2, Users, Search, Filter, Radio, Clock, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, orderBy, where } from 'firebase/firestore';
-import { LibraryLogRecord, DepartmentRecord, DEPARTMENTS } from '@/lib/firebase-schema';
+import { LibraryLogRecord, DepartmentRecord } from '@/lib/firebase-schema';
 
 const navy = 'hsl(221,72%,22%)';
 const card: React.CSSProperties = {
@@ -52,7 +52,6 @@ export function CurrentVisitors() {
     return () => clearInterval(timer);
   }, []);
 
-  // FIX: memoized so it never invalidates the query on re-render
   const todayStart = useMemo(() => startOfDay(new Date()).toISOString(), []);
 
   const logsQuery = useMemoFirebase(
@@ -71,23 +70,26 @@ export function CurrentVisitors() {
   const programsRef = useMemoFirebase(() => collection(db, 'programs'), [db]);
   const { data: allPrograms } = useCollection<ProgramRecord>(programsRef);
 
-  // FIX: Dynamic purposes from Firestore — admin sees ALL (including hidden) for filtering history
   const purposesRef = useMemoFirebase(() => collection(db, 'visit_purposes'), [db]);
   const { data: purposeDocs } = useCollection<VisitPurpose>(purposesRef);
 
   const livePurposes = useMemo(() => {
     if (!purposeDocs || purposeDocs.length === 0)
       return ['All Purposes', 'Reading Books', 'Research', 'Computer Use', 'Assignments'];
-    // Admin filter shows ALL purposes including hidden (for historical log filtering)
     return ['All Purposes', ...purposeDocs.map(p => p.label).sort()];
   }, [purposeDocs]);
 
-  // FIX: Programs filtered to selected dept
+  // 1. SORT PROGRAMS: Staff/Faculty first, then ID A-Z
   const deptPrograms = useMemo(() => {
     if (!allPrograms || deptFilter === 'All Departments') return [];
     return allPrograms
       .filter(p => p.deptID === deptFilter)
-      .sort((a, b) => a.code.localeCompare(b.code));
+      .sort((a, b) => {
+        const aIsStaff = a.code.toUpperCase().includes('STAFF') ? 0 : 1;
+        const bIsStaff = b.code.toUpperCase().includes('STAFF') ? 0 : 1;
+        if (aIsStaff !== bIsStaff) return aIsStaff - bIsStaff;
+        return a.code.localeCompare(b.code);
+      });
   }, [allPrograms, deptFilter]);
 
   // Reset program filter when dept changes
@@ -99,20 +101,24 @@ export function CurrentVisitors() {
     [todayLogs]
   );
 
+  // 2. FILTER LOGS: Updated to include Program matching
   const filteredLogs = useMemo(() => {
     const s = search.toLowerCase();
     return todayLogs.filter(l => {
       const matchSearch  = !s || (l.studentName || '').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
       const matchDept    = deptFilter    === 'All Departments' || l.deptID   === deptFilter;
       const matchPurpose = purposeFilter === 'All Purposes'    || l.purpose  === purposeFilter;
-      // FIX: Program filter — match against log's studentId via users collection would be ideal,
-      // but since logs don't store program, we filter by dept only and show program as secondary
+      
+      // Basic check: Does the studentId or a metadata field contain the program code?
+      const matchProgram = programFilter === 'All Programs' || l.studentId.toUpperCase().includes(programFilter.toUpperCase());
+
       const matchStatus  = statusFilter === 'All'
         || (statusFilter === 'Inside'    && !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp)))
         || (statusFilter === 'Completed' && !!l.checkOutTimestamp);
-      return matchSearch && matchDept && matchPurpose && matchStatus;
+        
+      return matchSearch && matchDept && matchPurpose && matchStatus && matchProgram;
     });
-  }, [todayLogs, search, deptFilter, purposeFilter, statusFilter]);
+  }, [todayLogs, search, deptFilter, programFilter, purposeFilter, statusFilter]);
 
   const formatDur = (checkIn: string, checkOut?: string) => {
     const diff = differenceInMinutes(checkOut ? parseISO(checkOut) : now, parseISO(checkIn));
@@ -157,7 +163,6 @@ export function CurrentVisitors() {
             </div>
           </div>
 
-          {/* Live badge + stats */}
           <div className="flex items-center gap-3">
             <div className="text-center px-3 py-1.5 rounded-xl" style={{ background: `${navy}08` }}>
               <p className="font-bold text-lg" style={{ color: navy }}>{currentlyInside.length}</p>
@@ -176,7 +181,6 @@ export function CurrentVisitors() {
 
         {/* Filter bar */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Search */}
           <div className="relative flex-1 min-w-[160px]">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input placeholder="Search name or ID..."
@@ -184,7 +188,7 @@ export function CurrentVisitors() {
               className="pl-8 h-9 bg-slate-50 border-slate-200 rounded-xl text-sm font-medium" />
           </div>
 
-          {/* FIX: Dept — shows full name in dropdown, only code in trigger after selection */}
+          {/* 3. SORT DEPTS: Library First, then ID A-Z */}
           <Select value={deptFilter} onValueChange={setDeptFilter}>
             <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
               <div className="flex items-center gap-1.5 overflow-hidden">
@@ -196,7 +200,11 @@ export function CurrentVisitors() {
             </SelectTrigger>
             <SelectContent className="rounded-xl">
               <SelectItem value="All Departments" className="font-semibold text-sm">All Colleges</SelectItem>
-              {depts?.sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
+              {depts?.slice().sort((a, b) => {
+                if (a.deptID === 'LIBRARY') return -1;
+                if (b.deptID === 'LIBRARY') return 1;
+                return a.deptID.localeCompare(b.deptID);
+              }).map(d => (
                 <SelectItem key={d.deptID} value={d.deptID} className="font-semibold text-sm">
                   <span className="font-bold mr-1.5" style={{ color: navy }}>[{d.deptID}]</span>
                   {d.departmentName}
@@ -205,7 +213,7 @@ export function CurrentVisitors() {
             </SelectContent>
           </Select>
 
-          {/* FIX: Program filter — only shows when a dept is selected */}
+          {/* Program filter: already sorted by useMemo above */}
           {deptFilter !== 'All Departments' && deptPrograms.length > 0 && (
             <Select value={programFilter} onValueChange={setProgramFilter}>
               <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
@@ -225,7 +233,6 @@ export function CurrentVisitors() {
             </Select>
           )}
 
-          {/* FIX: Purpose — dynamic from Firestore, all shown to admin */}
           <Select value={purposeFilter} onValueChange={setPurposeFilter}>
             <SelectTrigger className="h-9 w-36 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
               <SelectValue />
@@ -237,7 +244,6 @@ export function CurrentVisitors() {
             </SelectContent>
           </Select>
 
-          {/* Status */}
           <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100">
             {(['All', 'Inside', 'Completed'] as const).map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
@@ -301,7 +307,6 @@ export function CurrentVisitors() {
                       className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors"
                       style={{ height: '60px' }}>
 
-                      {/* Name */}
                       <TableCell className="pl-5">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0"
@@ -314,14 +319,12 @@ export function CurrentVisitors() {
                         </div>
                       </TableCell>
 
-                      {/* ID */}
                       <TableCell>
                         <span className="font-bold text-lg" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>
                           {log.studentId}
                         </span>
                       </TableCell>
 
-                      {/* Dept */}
                       <TableCell>
                         <span className="font-bold text-xs px-2.5 py-1 rounded-lg whitespace-nowrap"
                           style={{ background: `${navy}0d`, color: navy, fontFamily: "'DM Mono',monospace" }}>
@@ -329,28 +332,24 @@ export function CurrentVisitors() {
                         </span>
                       </TableCell>
 
-                      {/* Purpose */}
                       <TableCell>
                         <span className="text-sm font-semibold px-2.5 py-1.5 rounded-full bg-slate-100 text-slate-600">
                           {log.purpose}
                         </span>
                       </TableCell>
 
-                      {/* Time In */}
                       <TableCell>
                         <span className="text-base font-medium text-slate-600">
                           {format(parseISO(log.checkInTimestamp), 'h:mm a')}
                         </span>
                       </TableCell>
 
-                      {/* Time Inside */}
                       <TableCell>
                         <span className="font-bold text-base" style={{ color: isInside ? '#3b82f6' : '#64748b', fontFamily: "'DM Mono',monospace" }}>
                           {dur}
                         </span>
                       </TableCell>
 
-                      {/* Status */}
                       <TableCell className="text-right pr-5">
                         {isInside ? (
                           <span className="text-sm font-bold px-3 py-1.5 rounded-full flex items-center gap-1 ml-auto w-fit"

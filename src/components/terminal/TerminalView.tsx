@@ -49,6 +49,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
   const [countdown,         setCountdown]         = useState(5);
   const [lastAction,        setLastAction]        = useState<'checkin' | 'checkout'>('checkin');
   const [showNotRegistered, setShowNotRegistered] = useState(false);
+  const [isRegisteringFromPopup, setIsRegisteringFromPopup] = useState(false);
   const [blockedStudent,    setBlockedStudent]    = useState<{ name: string } | null>(null);
   const [sessionDuration,   setSessionDuration]   = useState<{ hours: number; minutes: number } | null>(null);
 
@@ -86,7 +87,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
       .catch(() => setLivePurposes(FALLBACK_PURPOSES));
   }, [db]);
 
-  // Load departments
+  // Load departments (keeping Version 1's clean approach)
   useEffect(() => {
     getDocs(collection(db, 'departments')).then(snap =>
       setAllDepts(snap.docs.map(d => d.data() as { deptID: string; departmentName: string })
@@ -94,7 +95,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     );
   }, [db]);
 
-  // Load programs when dept changes
+  // Load programs when dept changes (keeping Version 1's sorting)
   useEffect(() => {
     if (!visitorDeptId) { setDeptPrograms([]); return; }
     setIsLoadingProgs(true);
@@ -205,12 +206,54 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         return;
       }
 
-      // Not found — show not registered info
       // Not found — show popup card
       setShowNotRegistered(true);
     } catch {
       toast({ title: 'Registry Error', variant: 'destructive' });
     } finally { setIsSearching(false); }
+  };
+
+  // Called from the "Not Registered" popup — runs full Google OAuth then redirects to registration
+  const handleRegisterFromPopup = async () => {
+    setShowNotRegistered(false);
+    setIsRegisteringFromPopup(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      const result = await signInWithPopup(auth, provider);
+      const email  = result.user.email;
+      const SUPER_ADMIN = (process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL || '').toLowerCase();
+
+      if (!email?.endsWith('@neu.edu.ph') && email?.toLowerCase() !== SUPER_ADMIN) {
+        toast({ title: 'Restricted', description: 'Please use your @neu.edu.ph institutional account.', variant: 'destructive' });
+        return;
+      }
+
+      // Already registered? Proceed to kiosk
+      const uSnap = await getDocs(query(collection(db, 'users'), where('email', '==', email), limit(1)));
+      if (!uSnap.empty) {
+        const u = uSnap.docs[0].data() as UserRecord;
+        const asStudent: StudentRecord = {
+          studentId: u.id, id: u.id,
+          firstName: u.firstName, middleName: u.middleName || '',
+          lastName: u.lastName, email: u.email,
+          deptID: u.deptID || '', program: u.program || '',
+          role: u.role, status: u.status, isBlocked: (u.status as string) === 'blocked',
+        };
+        await checkExistingLogs(asStudent, !u.deptID || u.deptID === '');
+        return;
+      }
+
+      // Not in DB → go to registration form
+      if (onRegister) onRegister(email!);
+    } catch (err: any) {
+      if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
+        toast({ title: 'Authentication Failed', description: 'Please try again.', variant: 'destructive' });
+        setShowNotRegistered(true);
+      }
+    } finally {
+      setIsRegisteringFromPopup(false);
+    }
   };
 
   const handleGoogleLogin = async () => {
@@ -247,7 +290,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
       }
 
       // ── AUTO-REDIRECT: NEU email not in database → registration ──────────
-      // No manual register button needed — this handles it automatically
       if (email?.endsWith('@neu.edu.ph') && onRegister) {
         onRegister(email);
         return;
@@ -361,7 +403,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </div>
         )}
 
-        {/* ── DEPT/PROGRAM (visitors only) ── */}
+        {/* ── DEPT/PROGRAM (visitors only) — keeping Version 1's clean design ── */}
         {step === 'dept' && identifiedStudent && (
           <Card className="rounded-[2.5rem] shadow-2xl p-10 space-y-6 animate-in slide-in-from-bottom-4 duration-500"
             style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
@@ -437,7 +479,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </Card>
         )}
 
-        {/* ── PURPOSE — now a dropdown ── */}
+        {/* ── PURPOSE — keeping Version 1's clean design ── */}
         {step === 'purpose' && identifiedStudent && (
           <div className="rounded-[2rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom-4 duration-400"
             style={{ background: 'linear-gradient(160deg,hsl(225,70%,42%) 0%,hsl(221,72%,22%) 100%)' }}>
@@ -469,7 +511,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   Select Purpose of Visit
                 </p>
 
-                {/* FIX: Dropdown instead of grid buttons for data consistency */}
                 <Select value={purpose} onValueChange={setPurpose}>
                   <SelectTrigger className="h-14 rounded-2xl border-2 bg-slate-50 font-semibold text-base"
                     style={{ borderColor: purpose ? navy : '#e2e8f0' }}>
@@ -593,6 +634,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
             </div>
           );
         })()}
+
         {/* ── BLOCKED STUDENT POPUP ── */}
         {blockedStudent && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -623,39 +665,47 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </div>
         )}
 
-        {/* ── NOT REGISTERED POPUP ── */}
+        {/* ── NOT REGISTERED POPUP (using Version 2's exact design) ── */}
         {showNotRegistered && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
             style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', animation: 'fadeIn 0.2s ease-out' }}>
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in duration-300">
-              <div className="px-8 pt-8 pb-6 text-center space-y-4">
+              <div className="px-8 pt-8 pb-7 text-center space-y-5">
+
+                {/* Icon */}
                 <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
                   style={{ background: 'rgba(251,191,36,0.12)' }}>
                   <GraduationCap size={32} style={{ color: 'hsl(43,85%,42%)' }} />
                 </div>
+
+                {/* Text */}
                 <div className="space-y-2">
                   <h3 className="text-xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
                     Not Yet Registered
                   </h3>
                   <p className="text-slate-500 text-sm font-medium leading-relaxed">
-                    Sorry, this Institutional ID isn't yet registered. Please register using your{' '}
-                    <strong className="text-slate-800">Institutional Account</strong> first.
+                    Sorry, this Institutional ID isn't in our system. Please register using your{' '}
+                    <strong className="text-slate-800">Institutional Account</strong> to continue.
                   </p>
                 </div>
-                <div className="p-4 rounded-2xl text-left space-y-1.5 text-xs"
-                  style={{ background: 'rgba(10,26,77,0.04)', border: '1px solid rgba(10,26,77,0.08)' }}>
-                  <p className="font-bold text-slate-600 uppercase tracking-wide">How to register:</p>
-                  <ol className="text-slate-500 space-y-1 list-decimal list-inside font-medium">
-                    <li>Tap <strong>Institutional Login</strong> below</li>
-                    <li>Sign in with your <strong>@neu.edu.ph</strong> Google account</li>
-                    <li>You'll be taken to the registration form automatically</li>
-                  </ol>
-                </div>
+
+                {/* Primary action — triggers OAuth then auto-redirects to registration */}
+                <button
+                  onClick={handleRegisterFromPopup}
+                  disabled={isRegisteringFromPopup}
+                  className="w-full h-14 rounded-2xl font-bold text-base flex items-center justify-center gap-3 border-2 transition-all active:scale-95 disabled:opacity-60"
+                  style={{ borderColor: '#e2e8f0', color: '#1e293b', background: 'white' }}>
+                  {isRegisteringFromPopup
+                    ? <Loader2 size={20} className="animate-spin text-primary" />
+                    : <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />}
+                  {isRegisteringFromPopup ? 'Opening Google…' : 'Register with Google'}
+                </button>
+
+                {/* Dismiss */}
                 <button
                   onClick={() => setShowNotRegistered(false)}
-                  className="w-full h-12 rounded-2xl font-bold text-sm text-white transition-all active:scale-95"
-                  style={{ background: 'linear-gradient(135deg,hsl(221,72%,22%),hsl(221,60%,32%))' }}>
-                  Got it
+                  className="w-full text-xs font-semibold text-slate-400 hover:text-slate-600 transition-colors py-1">
+                  Cancel
                 </button>
               </div>
             </div>

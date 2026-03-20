@@ -184,21 +184,41 @@ export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean 
                       </TableCell>
                     </TableRow>
                   ) : (
-                    sortedAdmins.map(admin => (
-                      <TableRow key={admin.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors" style={{ height: 64 }}>
+                    sortedAdmins.map(admin => {
+                      const isCurrentUser = !!user?.email && admin.email?.toLowerCase() === user.email.toLowerCase();
+                      return (
+                      <TableRow key={admin.id}
+                        className="border-b border-slate-50 transition-colors"
+                        style={{
+                          height: 64,
+                          background: isCurrentUser
+                            ? 'linear-gradient(90deg, rgba(10,26,77,0.06) 0%, rgba(10,26,77,0.03) 100%)'
+                            : undefined,
+                          boxShadow: isCurrentUser ? `inset 3px 0 0 ${navy}` : undefined,
+                        }}>
 
                         {/* Name */}
                         <TableCell className="pl-5">
                           <div className="flex items-center gap-3">
                             <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs flex-shrink-0"
                               style={{
-                                background: admin.role === 'super_admin' ? `${navy}12` : 'rgba(100,116,139,0.1)',
-                                color: admin.role === 'super_admin' ? navy : '#64748b',
+                                background: isCurrentUser
+                                  ? `${navy}22`
+                                  : admin.role === 'super_admin' ? `${navy}12` : 'rgba(100,116,139,0.1)',
+                                color: isCurrentUser || admin.role === 'super_admin' ? navy : '#64748b',
                               }}>
                               {initials(admin)}
                             </div>
                             <div>
-                              <p className="font-bold text-slate-900 text-sm">{fullName(admin)}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-slate-900 text-sm">{fullName(admin)}</p>
+                                {isCurrentUser && (
+                                  <span className="text-[9px] font-extrabold uppercase tracking-widest px-1.5 py-0.5 rounded-md"
+                                    style={{ background: `${navy}15`, color: navy }}>
+                                    YOU
+                                  </span>
+                                )}
+                              </div>
                               {admin.program && (
                                 <p className="text-xs font-mono text-slate-400">{admin.program}</p>
                               )}
@@ -261,7 +281,7 @@ export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean 
                           )}
                         </TableCell>
                       </TableRow>
-                    ))
+                    ); })
                   )}
                 </TableBody>
               </Table>

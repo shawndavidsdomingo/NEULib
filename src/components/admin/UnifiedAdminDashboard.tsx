@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { LiveClock } from '@/components/LiveClock';
 import { OverviewDashboard } from './OverviewDashboard';
 import { UserManagement } from './UserManagement';
@@ -23,7 +23,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { UserRecord } from '@/lib/firebase-schema';
 import { User } from 'firebase/auth';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, query, where } from 'firebase/firestore';
+import { useToast } from '@/hooks/use-toast';
+import { collection, query, where, orderBy, limit } from 'firebase/firestore';
 
 // Explicit type for nav items — avoids literal tuple conflicts from `as const`
 interface NavItem {
@@ -113,6 +114,31 @@ export default function UnifiedAdminDashboard({
   );
   const { data: pendingReqs } = useCollection<any>(credReqRef);
   const credReqCount = pendingReqs?.length || 0;
+
+  // ── Real-time blocked attempt alert ─────────────────────────────────────
+  const { toast } = useToast();
+  const blockedAttemptsRef = useMemoFirebase(
+    () => query(collection(db, 'blocked_attempts'), orderBy('timestamp', 'desc'), limit(5)),
+    [db]
+  );
+  const { data: recentBlockedAttempts } = useCollection<any>(blockedAttemptsRef);
+  const seenIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!recentBlockedAttempts?.length) return;
+    recentBlockedAttempts.forEach(attempt => {
+      if (!attempt.id || seenIdsRef.current.has(attempt.id)) return;
+      seenIdsRef.current.add(attempt.id);
+      // Only alert for attempts in the last 30 seconds (live tap-ins, not historical)
+      const ageSeconds = (Date.now() - new Date(attempt.timestamp).getTime()) / 1000;
+      if (ageSeconds > 30) return;
+      toast({
+        title: '⚠ Restricted User Attempt',
+        description: `${attempt.studentName || 'Unknown'} attempted entry at ${new Date(attempt.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
+        variant: 'destructive',
+      });
+    });
+  }, [recentBlockedAttempts, toast]);
 
   const displayName = adminData
     ? [adminData.firstName, adminData.middleName, adminData.lastName].filter(Boolean).join(' ')
@@ -437,3 +463,12 @@ export default function UnifiedAdminDashboard({
     </div>
   );
 }
+
+// In UnifiedAdminDashboard.tsx — add when needed, remove after:
+//import { ProgramBackfillTool } from './ProgramBackfillTool';
+
+// In NAV_GROUPS:
+//{ title: '⚙ System Tools', items: [{ id: 'backfill', label: 'Data Migration', icon: Wrench }] }
+
+// In renderContent:
+//case 'backfill': return isSuperAdmin ? <ProgramBackfillTool /> : null;

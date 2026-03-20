@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { format, parseISO, isToday, differenceInMinutes, startOfDay, subDays } from 'date-fns';
-import { History, Search, Filter, Loader2, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { History, Search, Filter, Loader2, ArrowUpDown, ArrowUp, ArrowDown, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -22,7 +22,8 @@ const card: React.CSSProperties = {
 interface ProgramRecord { id: string; deptID: string; code: string; name: string; }
 interface VisitPurpose  { id: string; label: string; active: boolean; }
 
-type SortField = 'studentName' | 'checkInTimestamp' | 'checkOutTimestamp' | 'duration' | 'deptID' | 'purpose' | 'status';
+type SortField = 'studentName' | 'studentId' | 'checkInTimestamp' | 'checkOutTimestamp' | 'duration' | 'deptID' | 'purpose' | 'status';
+type LogView = 'sessions' | 'blocked';
 
 function formatDur(ci: string, co?: string) {
   if (!co) return '—';
@@ -50,6 +51,7 @@ export function LogHistory() {
   const [dateRange,     setDateRange]     = useState('7');
   const [sortField,     setSortField]     = useState<SortField>('checkInTimestamp');
   const [sortDir,       setSortDir]       = useState<'asc' | 'desc'>('desc');
+  const [logView,       setLogView]       = useState<LogView>('sessions');
 
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
@@ -104,16 +106,19 @@ export function LogHistory() {
   );
   const { data: allLogs, isLoading } = useCollection<LibraryLogRecord>(logsQ);
 
+  // Blocked attempts (separate collection)
+  const blockedAttemptsRef = useMemoFirebase(
+    () => query(collection(db, 'blocked_attempts'), orderBy('timestamp', 'desc'), limit(300)),
+    [db]
+  );
+  const { data: blockedAttempts, isLoading: isBlockedLoading } = useCollection<any>(blockedAttemptsRef);
+
   const filtered = useMemo(() => {
     if (!allLogs) return [];
     const s = search.toLowerCase();
     return allLogs.filter(l => {
       const matchS  = !s || (l.studentName||'').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
       const matchD  = deptFilter    === 'All Departments' || l.deptID  === deptFilter;
-      // Use log's own snapshotted program (not current user record).
-      // This preserves historical accuracy when a student changes dept/program.
-      const logProgram = l.program || '';
-      const matchProg = programFilter === 'All Programs' || logProgram === programFilter;
       const matchP  = purposeFilter === 'All Purposes'    || l.purpose === purposeFilter;
       // Role filter: look up student's role from userRoleMap
       const userRole = userRoleMap[l.studentId] || 'student';
@@ -127,12 +132,13 @@ export function LogHistory() {
         || (statusFilter === 'Active'    && !l.checkOutTimestamp && isToday(ci))
         || (statusFilter === 'Completed' && !!l.checkOutTimestamp)
         || (statusFilter === 'No Tap'    && noTap);
-      return matchS && matchD && matchProg && matchP && matchSt && matchRole;
+      return matchS && matchD && matchP && matchSt && matchRole;
     }).sort((a, b) => {
       let va = '', vb = '';
       if      (sortField === 'studentName')       { va = a.studentName||''; vb = b.studentName||''; }
       else if (sortField === 'checkInTimestamp')  { va = a.checkInTimestamp; vb = b.checkInTimestamp; }
       else if (sortField === 'checkOutTimestamp') { va = a.checkOutTimestamp||''; vb = b.checkOutTimestamp||''; }
+      else if (sortField === 'studentId')         { va = a.studentId||''; vb = b.studentId||''; }
       else if (sortField === 'deptID')            { va = a.deptID; vb = b.deptID; }
       else if (sortField === 'purpose')           { va = a.purpose; vb = b.purpose; }
       else if (sortField === 'duration') {
@@ -149,10 +155,23 @@ export function LogHistory() {
     });
   }, [allLogs, search, deptFilter, purposeFilter, statusFilter, roleFilter, sortField, sortDir, userRoleMap]);
 
+  // Three-state sort: asc → desc → reset to default
   const toggleSort = (f: SortField) => {
-    if (sortField === f) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortField(f); setSortDir('desc'); }
+    if (sortField !== f) { setSortField(f); setSortDir('desc'); return; }
+    if (sortDir === 'desc') { setSortDir('asc'); return; }
+    setSortField('checkInTimestamp'); setSortDir('desc');
   };
+
+  const handleReset = () => {
+    setSearch(''); setDeptFilter('All Departments'); setProgramFilter('All Programs');
+    setPurposeFilter('All Purposes'); setStatusFilter('All'); setRoleFilter('All');
+    setDateRange('7'); setSortField('checkInTimestamp'); setSortDir('desc');
+  };
+
+  const isFiltersDirty = search !== '' || deptFilter !== 'All Departments' ||
+    programFilter !== 'All Programs' || purposeFilter !== 'All Purposes' ||
+    statusFilter !== 'All' || roleFilter !== 'All' || dateRange !== '7' ||
+    sortField !== 'checkInTimestamp' || sortDir !== 'desc';
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return <ArrowUpDown size={11} className="ml-1 opacity-30 inline" />;
@@ -166,6 +185,88 @@ export function LogHistory() {
   return (
     <div className="space-y-4" style={{ fontFamily: "'DM Sans',sans-serif" }}>
 
+      {/* View toggle: Successful Sessions / Blocked Attempts */}
+      <div className="flex items-center gap-1 p-1 rounded-2xl bg-white/70 backdrop-blur-sm border border-white/50 w-fit"
+        style={{boxShadow:'0 2px 8px rgba(10,26,77,0.07)'}}>
+        {([
+          { id: 'sessions', label: 'Successful Sessions', icon: History },
+          { id: 'blocked',  label: 'Blocked Attempts',    icon: AlertTriangle },
+        ] as const).map(tab => (
+          <button key={tab.id} onClick={() => setLogView(tab.id)}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all"
+            style={logView === tab.id
+              ? { background: navy, color: 'white' }
+              : { color: '#64748b' }}>
+            <tab.icon size={13}/> {tab.label}
+            {tab.id === 'blocked' && (blockedAttempts?.length ?? 0) > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold"
+                style={{ background: 'rgba(220,38,38,0.15)', color: '#dc2626' }}>
+                {blockedAttempts!.length}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {logView === 'blocked' ? (
+        /* ── Blocked Attempts View ── */
+        <div style={{background:'rgba(255,255,255,0.97)',backdropFilter:'blur(20px)',border:'1px solid rgba(255,255,255,0.9)',boxShadow:'0 4px 20px rgba(10,26,77,0.09)',borderRadius:'1rem'}} className="overflow-hidden">
+          {isBlockedLoading ? (
+            <div className="py-14 flex items-center justify-center gap-3 text-slate-400">
+              <Loader2 className="animate-spin" size={18}/><span className="text-sm font-medium">Loading blocked attempts…</span>
+            </div>
+          ) : !blockedAttempts?.length ? (
+            <div className="py-14 text-center">
+              <AlertTriangle size={28} className="mx-auto text-slate-200 mb-3"/>
+              <p className="text-slate-400 text-sm font-medium">No blocked access attempts recorded.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 h-11 bg-slate-50/80">
+                    <th className="pl-5 text-left text-xs font-bold uppercase tracking-wide text-slate-500 py-3">Student</th>
+                    <th className="text-left text-xs font-bold uppercase tracking-wide text-slate-500 py-3">Student ID</th>
+                    <th className="text-left text-xs font-bold uppercase tracking-wide text-slate-500 py-3">Department</th>
+                    <th className="text-left text-xs font-bold uppercase tracking-wide text-slate-500 py-3 hidden md:table-cell">Program</th>
+                    <th className="text-left text-xs font-bold uppercase tracking-wide text-slate-500 py-3">Timestamp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {blockedAttempts.map((a, i) => (
+                    <tr key={a.id || i} className="border-b border-slate-50 transition-colors" style={{background:'rgba(239,68,68,0.03)',height:56}}>
+                      <td className="pl-5 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0 bg-red-400">
+                            {(a.studentName||'?')[0]}
+                          </div>
+                          <span className="font-semibold text-sm text-red-700">{a.studentName||'Unknown'}</span>
+                        </div>
+                      </td>
+                      <td className="py-3">
+                        <span className="font-mono text-xs font-bold px-2 py-1 rounded-lg bg-red-50 text-red-600">{a.studentId||'—'}</span>
+                      </td>
+                      <td className="py-3">
+                        <span className="font-bold text-xs px-2.5 py-1.5 rounded-lg whitespace-nowrap bg-red-50 text-red-600 font-mono">{a.deptID||'—'}</span>
+                      </td>
+                      <td className="py-3 hidden md:table-cell">
+                        <span className="text-xs font-medium text-red-500">{a.program||'—'}</span>
+                      </td>
+                      <td className="py-3">
+                        <p className="text-sm font-medium text-red-700">{a.timestamp ? format(parseISO(a.timestamp),'h:mm a') : '—'}</p>
+                        <p className="text-xs text-red-400 font-medium">{a.timestamp ? format(parseISO(a.timestamp),'MMM d, yyyy') : ''}</p>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+      /* ── Successful Sessions View ── */
+      <>
+
       {/* Filter card */}
       <div style={card} className="p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -178,7 +279,16 @@ export function LogHistory() {
               <p className="text-slate-400 text-sm mt-0.5">Complete visitor session records</p>
             </div>
           </div>
-          <p className="text-slate-400 text-xs font-medium">{filtered.length} record{filtered.length !== 1 ? 's' : ''}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-slate-400 text-xs font-medium">{logView === 'sessions' ? filtered.length : (blockedAttempts?.length || 0)} record{(logView === 'sessions' ? filtered.length : (blockedAttempts?.length || 0)) !== 1 ? 's' : ''}</p>
+            {isFiltersDirty && logView === 'sessions' && (
+              <button onClick={handleReset}
+                className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[10px] font-bold border transition-all active:scale-95"
+                style={{background:'rgba(220,38,38,0.06)',color:'#dc2626',borderColor:'rgba(220,38,38,0.18)'}}>
+                <RotateCcw size={10}/> Reset
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -283,31 +393,8 @@ export function LogHistory() {
       {/* Table */}
       <div style={card} className="overflow-hidden">
         {isLoading ? (
-          /* ── Verification loading screen ── */
-          <div className="py-20 flex flex-col items-center justify-center gap-6">
-            {/* Animated rings */}
-            <div className="relative w-20 h-20">
-              <div className="absolute inset-0 rounded-full border-4 border-slate-100" />
-              <div className="absolute inset-0 rounded-full border-4 border-transparent animate-spin"
-                style={{ borderTopColor: navy, animationDuration: '0.9s' }} />
-              <div className="absolute inset-2 rounded-full border-4 border-transparent animate-spin"
-                style={{ borderTopColor: 'hsl(221,60%,60%)', animationDuration: '1.4s', animationDirection: 'reverse' }} />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <History size={20} style={{ color: navy }} />
-              </div>
-            </div>
-            {/* Pulsing text */}
-            <div className="text-center space-y-1.5">
-              <p className="text-sm font-bold text-slate-700 tracking-wide">Verifying Session Archive</p>
-              <p className="text-xs font-medium text-slate-400">Fetching and cross-referencing records…</p>
-            </div>
-            {/* Skeleton rows */}
-            <div className="w-full max-w-2xl space-y-2 px-6">
-              {[100, 80, 90, 70, 85].map((w, i) => (
-                <div key={i} className="h-10 rounded-xl animate-pulse"
-                  style={{ background: `rgba(10,26,77,0.${i % 2 === 0 ? '04' : '06'})`, width: `${w}%` }} />
-              ))}
-            </div>
+          <div className="py-16 flex items-center justify-center gap-3 text-slate-400">
+            <Loader2 className="animate-spin" size={18} /><span className="text-sm font-medium">Loading history…</span>
           </div>
         ) : filtered.length === 0 ? (
           <div className="py-16 text-center">
@@ -322,9 +409,9 @@ export function LogHistory() {
                   <TableHead className={`pl-5 ${thStyle}`} onClick={() => toggleSort('studentName')}>
                     Student <SortIcon field="studentName" />
                   </TableHead>
-                  <TableHead className={thStyle} style={{ cursor: 'default' }}>Student ID</TableHead>
+                  <TableHead className={thStyle} onClick={() => toggleSort('studentId')}>Student ID <SortIcon field="studentId"/></TableHead>
                   <TableHead className={thStyle} onClick={() => toggleSort('deptID')}>
-                    Dept <SortIcon field="deptID" />
+                    Department <SortIcon field="deptID" />
                   </TableHead>
                   <TableHead className={`hidden md:table-cell ${thStyle}`} onClick={() => toggleSort('purpose')}>
                     Purpose <SortIcon field="purpose" />
@@ -430,6 +517,8 @@ export function LogHistory() {
           </div>
         )}
       </div>
+    </>
+    )}
     </div>
   );
 }

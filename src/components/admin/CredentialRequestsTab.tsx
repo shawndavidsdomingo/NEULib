@@ -14,7 +14,7 @@ import { useFirestore, useCollection, useMemoFirebase, useUser } from '@/firebas
 import { collection, query, orderBy, doc, updateDoc, addDoc, getDoc, setDoc, deleteDoc, writeBatch, getDocs, where, limit } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { writeAuditLog } from '@/lib/audit-logger';
-import { notificationId } from '@/lib/firestore-ids';
+import { libraryLogId } from '@/lib/firestore-ids';
 import { SuccessCard } from '@/components/ui/SuccessCard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -83,12 +83,62 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<{ title: string; description: string } | null>(null);
 
-  const sendStudentNotif = async (studentId: string, message: string) => {
-    const nid = notificationId(studentId);
-    await setDoc(doc(db, 'notifications', nid), {
-      studentId, message, type: 'credential_request',
-      sentAt: new Date().toISOString(), read: false,
+  // ─── Shared session re-attribution helper ────────────────────────────────
+  // Called after any credential update. If the student is currently tapped in
+  // today, auto tap-out the old session and immediately open a new one with
+  // the updated credentials (name / dept / program / studentId).
+  //
+  // OLD log doc: checkOutTimestamp added — its deptID/program/studentName are
+  // preserved exactly as they were (historical data integrity guaranteed).
+  //
+  // NEW log doc: carries the updated credentials from this point forward.
+  const reattributeSession = async (opts: {
+    lookupStudentId:  string;   // ID used to query existing logs
+    newStudentId:     string;   // may differ for student_id changes
+    newStudentName:   string;   // formatted "LAST, First"
+    newDeptID?:       string;   // if changed
+    newProgram?:      string;   // if changed
+  }) => {
+    const { lookupStudentId, newStudentId, newStudentName, newDeptID, newProgram } = opts;
+    const now = new Date().toISOString();
+
+    const activeLogQ = await getDocs(query(
+      collection(db, 'library_logs'),
+      where('studentId', '==', lookupStudentId),
+      orderBy('checkInTimestamp', 'desc'),
+      limit(1)
+    ));
+    if (activeLogQ.empty) return; // no logs at all
+
+    const activeLog     = activeLogQ.docs[0];
+    const activeLogData = activeLog.data();
+
+    // Only re-attribute if this is an ACTIVE session (no tap-out yet).
+    // We intentionally do NOT restrict to "today" — an admin could approve
+    // a request for a student who tapped in yesterday and is still inside.
+    const isActiveSession = !activeLogData.checkOutTimestamp;
+    if (!isActiveSession) return;
+
+    const batch = writeBatch(db);
+
+    // 1. Tap-out the current session — OLD credentials remain on this doc
+    //    (preserves historical dept/program/studentName untouched)
+    batch.update(activeLog.ref, { checkOutTimestamp: now });
+
+    // 2. Open a new session with the UPDATED credentials
+    const resolvedDept    = newDeptID  ?? activeLogData.deptID  ?? '';
+    const resolvedProgram = newProgram ?? activeLogData.program ?? '';
+    const newLogDocId     = libraryLogId(newStudentName, resolvedDept);
+    batch.set(doc(db, 'library_logs', newLogDocId), {
+      studentId:        newStudentId,
+      deptID:           resolvedDept,
+      program:          resolvedProgram,
+      checkInTimestamp: now,
+      purpose:          activeLogData.purpose,
+      studentName:      newStudentName,
     });
+
+    await batch.commit();
   };
 
   const handleApprove = async () => {
@@ -96,8 +146,8 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
     try {
       const ref = doc(db, 'credential_requests', req.id);
 
+      // ── Name change ──────────────────────────────────────────────────────
       if (req.type === 'name') {
-        // Determine which fields are approved
         const updates: Record<string, string> = {};
         if (approveFirst  && req.requested.firstName  !== req.current.firstName)  updates.firstName  = req.requested.firstName;
         if (approveMiddle && req.requested.middleName !== req.current.middleName) updates.middleName = req.requested.middleName;
@@ -109,42 +159,77 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
 
         if (anyApproved) {
           await updateDoc(doc(db, 'users', req.studentId), updates);
-        }
-        await updateDoc(ref, { status, updatedAt: new Date().toISOString(), approvedFields: updates });
 
+          // Session re-attribution: new session carries the updated name.
+          // The student's old logs keep their original studentName snapshot.
+          const newFirst  = updates.firstName  ?? req.current.firstName  ?? '';
+          const newLast   = updates.lastName   ?? req.current.lastName   ?? '';
+          const newName   = `${newLast.toUpperCase()}, ${newFirst}`;
+          try {
+            await reattributeSession({
+              lookupStudentId: req.studentId,
+              newStudentId:    req.studentId,
+              newStudentName:  newName,
+            });
+          } catch (e) {
+            console.warn('[CredentialRequestsTab] name re-attribution failed:', e);
+          }
+        }
+
+        await updateDoc(ref, { status, updatedAt: new Date().toISOString(), approvedFields: updates });
         const changedList = Object.keys(updates).join(', ') || 'none';
         const msg = status === 'approved'
           ? `Your name change request has been fully approved. Your name has been updated to: ${updates.firstName || req.current.firstName} ${updates.lastName || req.current.lastName}.`
           : status === 'partial'
           ? `Your name change request has been partially approved. Updated fields: ${changedList}.`
           : 'Your name change request was reviewed but no changes were applied.';
-        await sendStudentNotif(req.studentId, msg);
         writeAuditLog(db, user, 'user.edit', { targetId: req.studentId, targetName: req.studentName, detail: `Credential request (name) ${status}: fields updated — ${changedList}` });
 
+      // ── Dept / Program change ────────────────────────────────────────────
       } else if (req.type === 'dept_program') {
-        // Dept/Program: simple field update on existing doc
+        // 1. Update the user record — only the /users doc changes.
+        //    Existing library_logs keep their original deptID/program (snapshot integrity).
         await updateDoc(doc(db, 'users', req.studentId), req.requested);
+
+        // 2. Session re-attribution: if tapped in today, swap the active session
+        //    so future tap-out is attributed to the NEW dept/program.
+        try {
+          const existingName = req.studentName ||
+            `${(req.current.lastName ?? '').toUpperCase()}, ${req.current.firstName ?? ''}`;
+          await reattributeSession({
+            lookupStudentId: req.studentId,
+            newStudentId:    req.studentId,
+            newStudentName:  existingName,
+            newDeptID:       req.requested.deptID,
+            newProgram:      req.requested.program,
+          });
+        } catch (e) {
+          console.warn('[CredentialRequestsTab] dept_program re-attribution failed:', e);
+        }
+
         await updateDoc(ref, { status: 'approved', updatedAt: new Date().toISOString() });
-        await sendStudentNotif(req.studentId, `Your Department/Program change request has been approved and your record has been updated.`);
         writeAuditLog(db, user, 'user.edit', { targetId: req.studentId, targetName: req.studentName, detail: `Credential request (dept_program) approved` });
 
+      // ── Student ID change ────────────────────────────────────────────────
       } else if (req.type === 'student_id') {
-        // Student ID: doc ID IS the student ID, so we must copy to new doc + delete old
         const newId = req.requested.studentId;
         if (!newId) throw new Error('No new studentId in request');
-        // 1. Read the current user doc — try by doc ID first, then fall back to email query
+
+        // 1. Find the current user doc (may have been stored under email or old ID)
         let oldSnap = await getDoc(doc(db, 'users', req.studentId));
         if (!oldSnap.exists() && req.email) {
-          // Fallback: studentId field in the request may be stale; look up by email
           const emailQ = await getDocs(query(collection(db, 'users'), where('email', '==', req.email), limit(1)));
           if (!emailQ.empty) oldSnap = emailQ.docs[0] as any;
         }
         if (!oldSnap.exists()) throw new Error(`User doc not found for ID "${req.studentId}" or email "${req.email}"`);
-        const oldData  = oldSnap.data();
-        const actualDocId = oldSnap.id; // use the real Firestore doc ID, not req.studentId
+        const oldData     = oldSnap.data();
+        const actualDocId = oldSnap.id;
+
         // 2. Write to new doc with updated ID fields
-        await setDoc(doc(db, 'users', newId), { ...oldData, id: newId }); // write new doc
-        // 3. Cascade-update all library_logs (static imports — no dynamic import())
+        await setDoc(doc(db, 'users', newId), { ...oldData, id: newId });
+
+        // 3. Historical log cascade: update studentId on ALL existing logs so they
+        //    remain queryable by the new ID. deptID/program/studentName are untouched.
         try {
           const logsSnap = await getDocs(
             query(collection(db, 'library_logs'), where('studentId', '==', actualDocId), limit(500))
@@ -158,16 +243,31 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
           console.warn('[CredentialRequestsTab] cascade log update failed:', cascadeErr);
         }
 
-        // 4. Delete old user doc
+        // 4. Session re-attribution: if tapped in, close old session (now under newId
+        //    after cascade) and open a new one. Name/dept/program stay the same.
+        try {
+          const existingName = req.studentName ||
+            `${(oldData.lastName ?? '').toUpperCase()}, ${oldData.firstName ?? ''}`;
+          await reattributeSession({
+            lookupStudentId: newId,   // cascade already moved logs to newId
+            newStudentId:    newId,
+            newStudentName:  existingName,
+            newDeptID:       oldData.deptID,
+            newProgram:      oldData.program,
+          });
+        } catch (e) {
+          console.warn('[CredentialRequestsTab] student_id re-attribution failed:', e);
+        }
+
+        // 5. Delete old user doc
         await deleteDoc(doc(db, 'users', actualDocId));
         await updateDoc(ref, { status: 'approved', updatedAt: new Date().toISOString() });
-        await sendStudentNotif(newId, `Your Student ID change request has been approved. Your new ID is ${newId}. Please use this ID to log in going forward.`);
         writeAuditLog(db, user, 'user.edit', { targetId: newId, targetName: req.studentName, detail: `Student ID changed from ${req.studentId} to ${newId}` });
 
+      // ── Admin privilege ──────────────────────────────────────────────────
       } else if (req.type === 'admin_privilege') {
         await updateDoc(doc(db, 'users', req.studentId), { role: 'admin', status: 'active' });
         await updateDoc(ref, { status: 'approved', updatedAt: new Date().toISOString() });
-        await sendStudentNotif(req.studentId, `Your request for Admin Privilege has been approved. You now have admin access to the Library Portal.`);
         writeAuditLog(db, user, 'role.promote', { targetId: req.studentId, targetName: req.studentName, detail: `Admin privilege granted via credential request` });
       }
 
@@ -185,7 +285,6 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
     if (!reason) { toast({ title: 'Enter revocation reason', variant: 'destructive' }); setSaving(false); return; }
     try {
       await updateDoc(doc(db, 'credential_requests', req.id), { status: 'revoked', adminNote: reason, updatedAt: new Date().toISOString() });
-      await sendStudentNotif(req.studentId, `Your credential change request has been revoked. Reason: ${reason}`);
       writeAuditLog(db, user, 'user.edit', { targetId: req.studentId, targetName: req.studentName, detail: `Credential request revoked: ${reason}` });
       setSuccessMsg({ title: 'Request Revoked', description: 'The student has been notified of the decision.' });
     } catch (err: any) {
@@ -195,14 +294,19 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
     } finally { setSaving(false); }
   };
 
+  const [verifying, setVerifying] = useState(false);
+
   const handleToggleVerified = async () => {
-    await updateDoc(doc(db, 'credential_requests', req.id), {
-      verified: !req.verified,
-      status: !req.verified ? 'pending' : 'pending_verification',
-      updatedAt: new Date().toISOString(),
-    });
-    toast({ title: !req.verified ? 'Marked as Verified' : 'Verification removed' });
-    onDone();
+    setVerifying(true);
+    try {
+      await updateDoc(doc(db, 'credential_requests', req.id), {
+        verified: !req.verified,
+        status: !req.verified ? 'pending' : 'pending_verification',
+        updatedAt: new Date().toISOString(),
+      });
+      toast({ title: !req.verified ? 'Marked as Verified' : 'Verification removed' });
+      onDone();
+    } finally { setVerifying(false); }
   };
 
   const canApprove = !req.requiresVerification || req.verified;
@@ -217,6 +321,39 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
           color={successMsg.title.includes('Revoked') ? 'amber' : 'green'}
         />
       )}
+
+      {/* Processing overlay — shown while approve/revoke is in flight */}
+      {saving && !successMsg && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(8px)', animation: 'fadeIn 0.15s ease-out' }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-xs overflow-hidden"
+            style={{ animation: 'scaleIn 0.2s ease-out' }}>
+            <div className="px-8 py-8 text-center space-y-5">
+              {/* Dual-ring spinner */}
+              <div className="relative w-16 h-16 mx-auto">
+                <div className="absolute inset-0 rounded-full border-4 border-slate-100" />
+                <div className="absolute inset-0 rounded-full border-4 border-transparent animate-spin"
+                  style={{ borderTopColor: navy, animationDuration: '0.85s' }} />
+                <div className="absolute inset-2 rounded-full border-4 border-transparent animate-spin"
+                  style={{ borderTopColor: 'hsl(221,60%,60%)', animationDuration: '1.3s', animationDirection: 'reverse' }} />
+              </div>
+              <div className="space-y-1">
+                <p className="font-bold text-slate-800 text-base" style={{ fontFamily: "'Playfair Display',serif" }}>
+                  Processing Request
+                </p>
+                <p className="text-xs font-medium text-slate-400">
+                  {revoking ? 'Revoking and notifying student…' : 'Applying changes and notifying student…'}
+                </p>
+              </div>
+            </div>
+          </div>
+          <style>{`
+            @keyframes fadeIn  { from { opacity: 0 } to { opacity: 1 } }
+            @keyframes scaleIn { from { opacity: 0; transform: scale(0.9) } to { opacity: 1; transform: scale(1) } }
+          `}</style>
+        </div>
+      )}
+
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(6px)' }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden"
@@ -268,12 +405,14 @@ function ReviewModal({ req, onClose, onDone }: { req: CredentialRequest; onClose
                     {req.verified ? 'Student has been verified in person.' : 'Student must visit Admin Office before approval.'}
                   </p>
                 </div>
-                <button onClick={handleToggleVerified}
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95"
+                <button onClick={handleToggleVerified} disabled={verifying}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border transition-all active:scale-95 disabled:opacity-60 flex items-center gap-1.5"
                   style={req.verified
                     ? { background: 'white', borderColor: '#d1fae5', color: '#059669' }
                     : { background: navy, color: 'white', border: 'none' }}>
-                  {req.verified ? 'Undo' : 'Mark Verified'}
+                  {verifying
+                    ? <><Loader2 size={11} className="animate-spin" /> Processing…</>
+                    : req.verified ? 'Undo' : 'Mark Verified'}
                 </button>
               </div>
             </div>

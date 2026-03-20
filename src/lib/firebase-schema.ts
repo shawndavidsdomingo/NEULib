@@ -70,12 +70,52 @@ export interface LibraryLogRecord {
   id: string;
   studentId: string;
   deptID: string;
-  /** Snapshotted at check-in — never changes even if user updates their profile */
-  program?: string;
   checkInTimestamp: string;
   checkOutTimestamp?: string;
   purpose: string;
   studentName?: string;
+}
+
+// ── Blocked attempt log ────────────────────────────────────────────────────
+
+/** Written to /blocked_attempts when a blocked user tries to tap in */
+export interface BlockedAttemptRecord {
+  id:           string;
+  studentId:    string;
+  studentName:  string;
+  deptID:       string;
+  program?:     string;
+  timestamp:    string; // ISO
+}
+
+// ── Shared name formatter ────────────────────────────────────────────────────
+
+/**
+ * formatFullName — standardised "LAST, First Middle I."
+ *
+ * Middle name rules:
+ *   "Santos"     → "S."
+ *   "Sta. Maria" → "SM."
+ *   "De La Cruz" → "DLC."
+ *   blank/null   → omitted
+ */
+export function formatFullName(u: {
+  firstName?: string;
+  middleName?: string;
+  lastName?:  string;
+}): string {
+  const last  = (u.lastName  || '').trim().toUpperCase();
+  const first = (u.firstName || '').trim();
+  const raw   = (u.middleName || '').trim();
+
+  let mid = '';
+  if (raw) {
+    const words = raw.replace(/[.]/g, '').split(/\s+/).filter(Boolean);
+    mid = words.map(w => w[0].toUpperCase()).join('') + '.';
+  }
+
+  const parts = [first, mid].filter(Boolean).join(' ');
+  return last ? `${last}, ${parts}` : parts;
 }
 
 // ── Static reference data ───────────────────────────────────────────────────

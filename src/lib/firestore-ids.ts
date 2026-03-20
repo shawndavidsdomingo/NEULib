@@ -25,10 +25,22 @@ export function auditLogId(actorName: string): string {
   return `${ts}_${sanitize(actorName)}_${suffix4()}`;
 }
 
-/** library_logs: [CheckIn-Timestamp]_[StudentName]_[suffix] */
-export function libraryLogId(studentName: string): string {
-  const ts = new Date().toISOString();
-  return `${ts}_${sanitize(studentName)}_${suffix4()}`;
+/**
+ * library_logs: [CheckIn-Timestamp]_[DeptID]_[StudentName]_[4-char-suffix]
+ *
+ * Example: 2025-03-20T08-15-32.441Z_CICS_DELA_CRUZ-Juan_a3f9
+ *
+ * - Timestamp first  → chronological sort in Firestore console
+ * - DeptID second    → easy visual grouping by department
+ * - StudentName      → human-readable at a glance
+ * - Suffix           → prevents collisions on same-millisecond check-ins
+ */
+export function libraryLogId(studentName: string, deptID = ''): string {
+  // Use a filesystem-safe timestamp: replace colons with dashes
+  const ts   = new Date().toISOString().replace(/:/g, '-');
+  const dept = sanitize(deptID.toUpperCase(), 12);
+  const name = sanitize(studentName, 30);
+  return `${ts}_${dept}_${name}_${suffix4()}`;
 }
 
 /** notifications: [SentAt-Timestamp]_[StudentID]_[suffix] */

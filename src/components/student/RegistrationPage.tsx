@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useUser, useFirestore } from '@/firebase';
-import { collection, query, where, limit, getDocs, setDoc, doc } from 'firebase/firestore';
+import { collection, query, where, limit, getDocs, setDoc, doc, getDoc } from 'firebase/firestore';
 import { Loader2, UserCircle2, IdCard, GraduationCap, Building2, CheckCircle2, ArrowLeft } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -12,7 +12,7 @@ import { UserRecord, ProgramRecord } from '@/lib/firebase-schema';
 const navy = 'hsl(221,72%,22%)';
 
 interface Props {
-  onSubmitted: (registeredUser: UserRecord) => void;   // called after successful registration → skip to purpose selection
+  onSubmitted: (user: UserRecord) => void;   // ✅ now receives the full user record
   onBack: () => void;        // cancel → back to landing
 }
 
@@ -121,11 +121,20 @@ export default function RegistrationPage({ onSubmitted, onBack }: Props) {
 
     setSubmitting(true);
     try {
-      // Check if ID already taken by someone else
-      const existing = await getDocs(query(collection(db, 'users'), where('id', '==', studentId.trim()), limit(1)));
-      if (!existing.empty && existing.docs[0].data().email !== user.email) {
-        setError('This Student ID is already registered to another account.');
+      // Check if ID already registered — two-pronged:
+      // 1. Direct doc lookup (doc ID = student ID, fastest path)
+      const directDoc = await getDoc(doc(db, 'users', studentId.trim()));
+      if (directDoc.exists() && directDoc.data().email !== user.email) {
+        setError('This Student ID is already registered to another account. Please double-check your ID card.');
         setSubmitting(false); return;
+      }
+      // 2. Field-based fallback (legacy records stored by email as doc ID)
+      if (!directDoc.exists()) {
+        const fieldQuery = await getDocs(query(collection(db, 'users'), where('id', '==', studentId.trim()), limit(1)));
+        if (!fieldQuery.empty && fieldQuery.docs[0].data().email !== user.email) {
+          setError('This Student ID is already registered to another account. Please double-check your ID card.');
+          setSubmitting(false); return;
+        }
       }
 
       const newData: UserRecord = {
@@ -142,12 +151,18 @@ export default function RegistrationPage({ onSubmitted, onBack }: Props) {
       };
 
       await setDoc(doc(db, 'users', studentId.trim()), newData, { merge: false });
+      
+      // Construct the full user record to pass back
+      const savedUser: UserRecord = {
+        ...newData,
+        id: studentId.trim(),
+      };
+      
       setDone(true);
 
-      // After a short confirmation display, skip straight to purpose selection
-      // by passing the newly registered user — no need to re-enter dept/program.
+      // Allow the success screen to be visible for a moment, then call onSubmitted
       setTimeout(() => {
-        onSubmitted(newData);
+        onSubmitted(savedUser);
       }, 3000);
 
     } catch (e: any) {
@@ -170,7 +185,7 @@ export default function RegistrationPage({ onSubmitted, onBack }: Props) {
               Registration Submitted!
             </h2>
             <p className="text-slate-500 text-sm mt-2 leading-relaxed">
-              Welcome! Taking you to check-in now…
+              Your account is pending admin verification. You will be redirected shortly.
             </p>
           </div>
           <div className="flex items-center justify-center gap-2 text-xs text-slate-400 font-medium">
@@ -257,6 +272,7 @@ export default function RegistrationPage({ onSubmitted, onBack }: Props) {
             <Input
               value={studentId}
               onChange={e => handleIdChange(e.target.value)}
+              placeholder="24-12864-481"
               className="h-11 rounded-xl bg-slate-50 font-mono font-semibold text-sm"
             />
             <p className="text-xs text-slate-400 mt-1">Format: YY-XXXXX-ZZZ · Dashes are inserted automatically</p>

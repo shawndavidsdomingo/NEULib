@@ -248,10 +248,7 @@ export default function Home() {
     if (view === 'registration') return (
       <RegistrationPage
         onSubmitted={(registeredUser) => {
-          // After registration, go straight to kiosk purpose step with credentials pre-filled
-          if (registeredUser) {
-            setResolvedUser(registeredUser);
-          }
+          setResolvedUserAndSave(registeredUser);
           setView('terminal');
         }}
         onBack={handleExit}
@@ -464,7 +461,7 @@ export default function Home() {
             <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100 text-left space-y-1.5">
               <p className="text-sm font-bold text-blue-800">To get access:</p>
               <ol className="text-sm text-blue-700 space-y-1 list-decimal list-inside font-medium">
-                <li>Contact a <strong>Super Admin</strong></li>
+                <li>Contact an <strong>Admin</strong></li>
                 <li>Ask them to register your email in <strong>Staff Access Registry</strong></li>
                 <li>Return and sign in again</li>
               </ol>

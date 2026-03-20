@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { format, parseISO } from 'date-fns';
 import {
-  ShieldAlert, Search, Filter, ArrowUpDown, ArrowUp, ArrowDown,
+  ShieldAlert, Search, Filter, ArrowUpDown, ArrowUp, ArrowDown, RotateCcw,
   Loader2, UserCheck, UserX, Trash2, Lock, Unlock, Edit3,
   UserPlus, Key, RefreshCw, Bell, Maximize2, X as XIcon,
 } from 'lucide-react';
@@ -89,6 +89,8 @@ export function AuditLogTab() {
   const [sortDir,      setSortDir]      = useState<'asc' | 'desc'>('desc');
   const [expandedLog,  setExpandedLog]  = useState<AuditLogRecord | null>(null);
 
+  const isFiltersDirty = search !== '' || category !== 'all' || sortField !== 'timestamp' || sortDir !== 'desc';
+
   const logsQuery = useMemoFirebase(
     () => query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(500)),
     [db]
@@ -122,6 +124,13 @@ export function AuditLogTab() {
   const handleSort = (f: SortField) => {
     if (sortField === f) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortField(f); setSortDir('desc'); }
+  };
+
+  const handleReset = () => {
+    setSearch('');
+    setCategory('all');
+    setSortField('timestamp');
+    setSortDir('desc');
   };
 
   const SortIcon = ({ field }: { field: SortField }) => {
@@ -184,6 +193,13 @@ export function AuditLogTab() {
 
           <p className="text-slate-400 text-xs font-medium ml-auto">
             {filtered.length} event{filtered.length !== 1 ? 's' : ''}
+            {isFiltersDirty && (
+              <button onClick={handleReset}
+                className="ml-2 flex items-center gap-1.5 h-7 px-2.5 rounded-lg text-[10px] font-bold border transition-all active:scale-95 inline-flex"
+                style={{background:'rgba(220,38,38,0.06)',color:'#dc2626',borderColor:'rgba(220,38,38,0.18)'}}>
+                <RotateCcw size={10}/> Reset
+              </button>
+            )}
             {(logs?.length ?? 0) > 500 && <span className="ml-1">(showing latest 500)</span>}
           </p>
         </div>

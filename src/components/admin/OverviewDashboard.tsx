@@ -17,7 +17,7 @@
  *  - Chart title:                   className="...text-lg..."                  (search "Academic Attendance")
  *  - Chart subtitle:                className="...text-xs..."                  (search "Click a bar to cross-filter")
  *  - Legend text:                   wrapperStyle={{ fontSize: 12, ... }}       (search "wrapperStyle")
- *  - Tooltip font:                  fontSize: 12/13 in ChartTooltip function   (search "function ChartTooltip")
+ *  - Tooltip font:                  fontSize: 14/15 in ChartTooltip function   (search "function ChartTooltip")
  *  - Purpose bar YAxis labels:      tick={{ fontSize: 12 }}                    (search "YAxis dataKey")
  *  - Stat card big numbers:         className="text-3xl sm:text-4xl"           (search "overview-stat-number comment")
  *  - Bar width (fullness):          barSize={30}                               (search "barSize")
@@ -120,9 +120,9 @@ function ChartTooltip({ active, payload, label }: any) {
       padding: '8px 12px', boxShadow: '0 4px 16px rgba(10,26,77,0.12)',
       fontFamily: "'DM Sans',sans-serif",
     }}>
-      {label && <p style={{ fontSize: 12, fontWeight: 700, color: navy, marginBottom: 4 }}>{label}</p>}
+      {label && <p style={{ fontSize: 14, fontWeight: 700, color: navy, marginBottom: 4 }}>{label}</p>}
       {payload.map((p: any, i: number) => (
-        <p key={i} style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>
+        <p key={i} style={{ fontSize: 15, fontWeight: 600, color: '#475569' }}>
           {p.name && !['visits','value','a','b','trend','A trend','B trend'].includes(p.name)
             ? `${p.name}: ` : ''}
           <span style={{ fontWeight: 800, color: p.color || navy }}>{p.value}</span>
@@ -424,6 +424,48 @@ export function OverviewDashboard() {
     return Object.entries(c).sort((a, b) => b[1] - a[1])
       .map(([name, visits], i) => ({ name, visits, fill: COLORS[i % COLORS.length] }));
   }, [focusLogs]);
+
+  // ── Compare-specific breakdowns (bound to A/B logs, not global focusLogs) ──
+  const aDeptBreakdown = useMemo(() => {
+    const c: Record<string, number> = {};
+    aLogs.forEach(l => { const k = l.deptID || 'N/A'; c[k] = (c[k] || 0) + 1; });
+    return Object.entries(c).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+  }, [aLogs]);
+
+  const bDeptBreakdown = useMemo(() => {
+    const c: Record<string, number> = {};
+    bLogs.forEach(l => { const k = l.deptID || 'N/A'; c[k] = (c[k] || 0) + 1; });
+    return Object.entries(c).sort((a, b) => b[1] - a[1]).map(([name, value]) => ({ name, value }));
+  }, [bLogs]);
+
+  // Collect all unique purposes across both A and B for aligned comparison
+  const abPurposeKeys = useMemo(() => {
+    const keys = new Set<string>();
+    [...aLogs, ...bLogs].forEach(l => keys.add(l.purpose));
+    return Array.from(keys).sort();
+  }, [aLogs, bLogs]);
+
+  const aPurposeBreakdown = useMemo(() => {
+    const c: Record<string, number> = {};
+    aLogs.forEach(l => { c[l.purpose] = (c[l.purpose] || 0) + 1; });
+    return abPurposeKeys.map(name => ({ name, a: c[name] || 0 }));
+  }, [aLogs, abPurposeKeys]);
+
+  const bPurposeBreakdown = useMemo(() => {
+    const c: Record<string, number> = {};
+    bLogs.forEach(l => { c[l.purpose] = (c[l.purpose] || 0) + 1; });
+    return abPurposeKeys.map(name => ({ name, b: c[name] || 0 }));
+  }, [bLogs, abPurposeKeys]);
+
+  // Merged for dual side-by-side bar
+  const abPurposeMerged = useMemo(() =>
+    abPurposeKeys.map(name => ({
+      name,
+      a: aPurposeBreakdown.find(x => x.name === name)?.a ?? 0,
+      b: bPurposeBreakdown.find(x => x.name === name)?.b ?? 0,
+    })),
+    [abPurposeKeys, aPurposeBreakdown, bPurposeBreakdown]
+  );
 
   // ── Compare stats ─────────────────────────────────────────────────────────
   const aTotal = aLogs.length;
@@ -867,18 +909,18 @@ export function OverviewDashboard() {
                 <CartesianGrid vertical={false} strokeDasharray="3 3" strokeOpacity={0.07} />
                 {/* XAxis fontSize: 13 → increase for larger axis labels */}
                 <XAxis dataKey="name" axisLine={false} tickLine={false}
-                  tick={{ fill: '#94a3b8', fontSize: 13, fontWeight: 700 }} dy={6} />
+                  tick={{ fill: '#94a3b8', fontSize: 15, fontWeight: 700 }} dy={6} />
                 {/* YAxis fontSize: 13 → increase for larger axis labels */}
                 <YAxis tickLine={false} axisLine={false}
-                  tick={{ fill: '#94a3b8', fontSize: 13, fontWeight: 700 }} />
+                  tick={{ fill: '#94a3b8', fontSize: 15, fontWeight: 700 }} />
                 <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(10,26,77,0.04)', strokeWidth: 0 }} />
                 {avgLine > 0 && (
                   // ReferenceLine label fontSize: 11 → increase here
                   <ReferenceLine y={avgLine} stroke="#f59e0b" strokeDasharray="4 3" strokeWidth={1.5}
                     label={{ value: `Avg ${avgLine}`, position: 'right', fontSize: 11, fontWeight: 700, fill: '#f59e0b' }} />
                 )}
-                {/* barSize: 30 → increase for wider/fuller bars */}
-                <Bar dataKey="visits" radius={[5, 5, 0, 0]} barSize={30} cursor="pointer">
+                {/* barSize: 36 → increase further for even wider bars */}
+                <Bar dataKey="visits" radius={[5, 5, 0, 0]} barSize={36} cursor="pointer">
                   {chartData.map((e, i) => (
                     <Cell key={i}
                       fill={e.visits > 0 ? BAR_PALETTE[i % BAR_PALETTE.length] : '#e2e8f0'}
@@ -899,9 +941,9 @@ export function OverviewDashboard() {
               <ComposedChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 8 }}>
                 <CartesianGrid vertical={false} strokeDasharray="3 3" strokeOpacity={0.07} />
                 <XAxis dataKey="name" axisLine={false} tickLine={false}
-                  tick={{ fill: '#94a3b8', fontSize: 13, fontWeight: 700 }} dy={6} />
+                  tick={{ fill: '#94a3b8', fontSize: 15, fontWeight: 700 }} dy={6} />
                 <YAxis tickLine={false} axisLine={false}
-                  tick={{ fill: '#94a3b8', fontSize: 13, fontWeight: 700 }} />
+                  tick={{ fill: '#94a3b8', fontSize: 15, fontWeight: 700 }} />
                 <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(10,26,77,0.03)', strokeWidth: 0 }} />
                 <Bar dataKey="a" name={aLabel} fill={COLOR_A} radius={[4, 4, 0, 0]} barSize={14} />
                 <Bar dataKey="b" name={bLabel} fill={COLOR_B} radius={[4, 4, 0, 0]} barSize={14} />
@@ -959,85 +1001,160 @@ export function OverviewDashboard() {
       {/* ══ PHASE 4 — Segmentation ══════════════════════════════════════════ */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-        {/* Donut */}
+        {/* ── By Department ────────────────────────────────────────────── */}
         <div style={card}>
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <PieIcon size={16} style={{ color: navy }} />
               <div>
                 <h3 className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>By Department</h3>
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mt-0.5">{focusLabel}</p>
+                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mt-0.5">
+                  {compareMode ? `${aLabel} vs ${bLabel}` : focusLabel}
+                </p>
               </div>
             </div>
-            {focusDay && <span className="text-[10px] font-bold px-2 py-1 rounded-full text-white" style={{ background: navy }}>Filtered</span>}
+            {!compareMode && focusDay && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full text-white" style={{ background: navy }}>Filtered</span>
+            )}
+            {compareMode && (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 text-[10px] font-bold" style={{ color: COLOR_A }}>
+                  <div className="w-2 h-2 rounded-full" style={{ background: COLOR_A }} />{aLabel}
+                </div>
+                <span className="text-slate-300 text-xs">·</span>
+                <div className="flex items-center gap-1 text-[10px] font-bold" style={{ color: COLOR_B }}>
+                  <div className="w-2 h-2 rounded-full" style={{ background: COLOR_B }} />{bLabel}
+                </div>
+              </div>
+            )}
           </div>
           <div style={{ height: 280, padding: '8px' }}>
-            {deptBreakdown.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">No data</div>
+            {!compareMode ? (
+              deptBreakdown.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">No data</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={deptBreakdown} cx="50%" cy="44%"
+                      innerRadius={52} outerRadius={80} paddingAngle={3}
+                      dataKey="value" labelLine={false} label={DonutLabel} strokeWidth={0}>
+                      {deptBreakdown.map((_, i) => (
+                        <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="none" style={{ outline: 'none' }} />
+                      ))}
+                    </Pie>
+                    <Tooltip content={<ChartTooltip />} />
+                    <Legend verticalAlign="bottom" height={60} iconType="circle"
+                      wrapperStyle={{ fontSize: 14, fontWeight: 700, paddingTop: 4 }} />
+                  </PieChart>
+                </ResponsiveContainer>
+              )
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={deptBreakdown}
-                    cx="50%" cy="44%"
-                    innerRadius={52} outerRadius={80}
-                    paddingAngle={3} dataKey="value"
-                    labelLine={false} label={DonutLabel}
-                    strokeWidth={0}>
-                    {deptBreakdown.map((_, i) => (
-                      <Cell key={i}
-                        fill={COLORS[i % COLORS.length]}
-                        // Fix: no black outline on slice click
-                        stroke="none"
-                        style={{ outline: 'none' }}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip content={<ChartTooltip />} />
-                  {/* Legend fontSize: 12 → increase wrapperStyle fontSize */}
-                  <Legend verticalAlign="bottom" height={60} iconType="circle"
-                    wrapperStyle={{ fontSize: 12, fontWeight: 700, paddingTop: 4 }} />
-                </PieChart>
-              </ResponsiveContainer>
+              /* Compare mode: side-by-side donut pair */
+              <div className="grid grid-cols-2 h-full">
+                {[
+                  { data: aDeptBreakdown, label: aLabel, color: COLOR_A },
+                  { data: bDeptBreakdown, label: bLabel, color: COLOR_B },
+                ].map(({ data, label, color }, si) => (
+                  <div key={si} className="flex flex-col items-center justify-center">
+                    <p className="text-[10px] font-bold uppercase tracking-widest mb-1" style={{ color }}>{label}</p>
+                    {data.length === 0 ? (
+                      <p className="text-xs text-slate-300 italic">No data</p>
+                    ) : (
+                      <ResponsiveContainer width="100%" height={220}>
+                        <PieChart>
+                          <Pie data={data} cx="50%" cy="46%" innerRadius={36} outerRadius={62}
+                            paddingAngle={3} dataKey="value" labelLine={false} strokeWidth={0}>
+                            {data.map((_, i) => (
+                              <Cell key={i} fill={i === 0 ? color : COLORS[(i + si * 2) % COLORS.length]}
+                                stroke="none" style={{ outline: 'none' }} />
+                            ))}
+                          </Pie>
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend iconType="circle" iconSize={8}
+                            wrapperStyle={{ fontSize: 12, fontWeight: 700, paddingTop: 2 }} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
 
-        {/* Horizontal bar — By Purpose */}
+        {/* ── By Visit Purpose ─────────────────────────────────────────── */}
         <div style={card}>
           <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <BarChart3 size={16} style={{ color: navy }} />
               <div>
                 <h3 className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>By Visit Purpose</h3>
-                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mt-0.5">{focusLabel} · sorted by volume</p>
+                <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mt-0.5">
+                  {compareMode ? `${aLabel} vs ${bLabel}` : `${focusLabel} · sorted by volume`}
+                </p>
               </div>
             </div>
-            {focusDay && <span className="text-[10px] font-bold px-2 py-1 rounded-full text-white" style={{ background: navy }}>Filtered</span>}
+            {!compareMode && focusDay && (
+              <span className="text-[10px] font-bold px-2 py-1 rounded-full text-white" style={{ background: navy }}>Filtered</span>
+            )}
+            {compareMode && (
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 text-[10px] font-bold" style={{ color: COLOR_A }}>
+                  <div className="w-2 h-2 rounded-sm" style={{ background: COLOR_A }} />{aLabel}
+                </div>
+                <span className="text-slate-300 text-xs">·</span>
+                <div className="flex items-center gap-1 text-[10px] font-bold" style={{ color: COLOR_B }}>
+                  <div className="w-2 h-2 rounded-sm" style={{ background: COLOR_B }} />{bLabel}
+                </div>
+              </div>
+            )}
           </div>
           <div style={{ height: 280, padding: '8px 8px 8px 0' }}>
-            {purposeBreakdown.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">No data</div>
+            {!compareMode ? (
+              purposeBreakdown.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">No data</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={purposeBreakdown} layout="vertical"
+                    margin={{ left: 16, right: 40, top: 8, bottom: 8 }}>
+                    <CartesianGrid horizontal={false} strokeOpacity={0.05} />
+                    <XAxis type="number" hide />
+                    {/* barSize: 26 → increase for wider bars */}
+                    <YAxis dataKey="name" type="category" width={100}
+                      tick={{ fontSize: 14, fontWeight: 600, fill: '#64748b' }}
+                      axisLine={false} tickLine={false} />
+                    <Tooltip content={<ChartTooltip />} cursor={false} />
+                    <Bar dataKey="visits" radius={[0, 6, 6, 0]} barSize={30}
+                      cursor="pointer" activeBar={false}
+                      label={{ position: 'right', fontSize: 12, fontWeight: 700, fill: '#64748b', formatter: (v: any) => v > 0 ? v : '' }}>
+                      {purposeBreakdown.map((e, i) => (
+                        <Cell key={`c-${i}`} fill={e.fill || '#64748b'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )
             ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={purposeBreakdown} layout="vertical"
-                  margin={{ left: 16, right: 40, top: 8, bottom: 8 }}>
-                  <CartesianGrid horizontal={false} strokeOpacity={0.05} />
-                  <XAxis type="number" hide />
-                  {/* Purpose label fontSize: 12 → increase tick fontSize here */}
-                  <YAxis dataKey="name" type="category" width={100}
-                    tick={{ fontSize: 12, fontWeight: 600, fill: '#64748b' }}
-                    axisLine={false} tickLine={false} />
-                  <Tooltip content={<ChartTooltip />} cursor={false} />
-                  <Bar dataKey="visits" radius={[0, 6, 6, 0]} barSize={22}
-                    cursor="pointer" activeBar={false}
-                    label={{ position: 'right', fontSize: 12, fontWeight: 700, fill: '#64748b', formatter: (v: any) => v > 0 ? v : '' }}>
-                    {purposeBreakdown.map((e, i) => (
-                      <Cell key={`c-${i}`} fill={e.fill || '#64748b'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+              /* Compare mode: dual side-by-side grouped horizontal bars */
+              abPurposeMerged.length === 0 ? (
+                <div className="h-full flex items-center justify-center text-slate-400 text-sm font-medium">No data</div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={abPurposeMerged} layout="vertical"
+                    margin={{ left: 16, right: 40, top: 8, bottom: 8 }}>
+                    <CartesianGrid horizontal={false} strokeOpacity={0.05} />
+                    <XAxis type="number" hide />
+                    <YAxis dataKey="name" type="category" width={100}
+                      tick={{ fontSize: 14, fontWeight: 600, fill: '#64748b' }}
+                      axisLine={false} tickLine={false} />
+                    <Tooltip content={<ChartTooltip />} cursor={false} />
+                    <Bar dataKey="a" name={aLabel} fill={COLOR_A} radius={[0, 4, 4, 0]} barSize={11}
+                      label={{ position: 'right', fontSize: 11, fontWeight: 700, fill: COLOR_A, formatter: (v: any) => v > 0 ? v : '' }} />
+                    <Bar dataKey="b" name={bLabel} fill={COLOR_B} radius={[0, 4, 4, 0]} barSize={11}
+                      label={{ position: 'right', fontSize: 11, fontWeight: 700, fill: COLOR_B, formatter: (v: any) => v > 0 ? v : '' }} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )
             )}
           </div>
         </div>

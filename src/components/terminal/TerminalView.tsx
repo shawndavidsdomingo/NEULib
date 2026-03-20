@@ -7,12 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { CheckCircle2, Scan, ArrowRight, Loader2, Radio, ArrowLeft, LogOut, GraduationCap, Building2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { useFirestore, addDocumentNonBlocking, updateDocumentNonBlocking, useAuth, useUser } from '@/firebase';
+import { useFirestore, addDocumentNonBlocking, setDocumentNonBlocking, updateDocumentNonBlocking, useAuth, useUser } from '@/firebase';
 import { collection, query, where, limit, doc, getDoc, getDocs, orderBy, setDoc } from 'firebase/firestore';
 import { signInAnonymously, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { isToday, parseISO } from 'date-fns';
 import { formatStudentId } from '@/lib/student-id-formatter';
-import { StudentRecord, UserRecord, DEPARTMENTS, ProgramRecord } from '@/lib/firebase-schema';
+import { libraryLogId } from '@/lib/firestore-ids';
+import { StudentRecord, UserRecord, DEPARTMENTS, PROGRAMS, ProgramRecord } from '@/lib/firebase-schema';
 
 const FALLBACK_PURPOSES = [
   { value: 'Reading Books', label: 'Reading & Private Study' },
@@ -81,7 +82,13 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         if (snap.empty) { setLivePurposes(FALLBACK_PURPOSES); return; }
         const sorted = snap.docs
           .map(d => d.data() as { value: string; label: string; order?: number })
-          .sort((a, b) => (a.order ?? 99) - (b.order ?? 99));
+          // Primary sort: explicit `order` field (admin-defined priority).
+          // Secondary sort: alphabetical by label for a consistent fallback.
+          .sort((a, b) => {
+            const orderDiff = (a.order ?? 99) - (b.order ?? 99);
+            if (orderDiff !== 0) return orderDiff;
+            return (a.label ?? '').localeCompare(b.label ?? '');
+          });
         setLivePurposes(sorted.map(p => ({ value: p.value, label: p.label })));
       })
       .catch(() => setLivePurposes(FALLBACK_PURPOSES));
@@ -89,10 +96,22 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
 
   // Load departments
   useEffect(() => {
-    getDocs(collection(db, 'departments')).then(snap =>
-      setAllDepts(snap.docs.map(d => d.data() as { deptID: string; departmentName: string })
-        .sort((a, b) => a.departmentName.localeCompare(b.departmentName)))
-    );
+    getDocs(collection(db, 'departments')).then(snap => {
+      // Use DEPARTMENTS key insertion order as canonical sort — LIBRARY first, then colleges alphabetically
+      const DEPT_ORDER = Object.keys(DEPARTMENTS);
+      setAllDepts(
+        snap.docs
+          .map(d => d.data() as { deptID: string; departmentName: string })
+          .sort((a, b) => {
+            const ai = DEPT_ORDER.indexOf(a.deptID);
+            const bi = DEPT_ORDER.indexOf(b.deptID);
+            if (ai !== -1 && bi !== -1) return ai - bi;   // both known — use schema order
+            if (ai !== -1) return -1;                       // a known, b unknown — a first
+            if (bi !== -1) return 1;                        // b known, a unknown — b first
+            return a.departmentName.localeCompare(b.departmentName); // both unknown — alpha
+          })
+      );
+    });
   }, [db]);
 
   // Load programs when dept changes
@@ -101,9 +120,27 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     setIsLoadingProgs(true);
     setVisitorProgram('');
     getDocs(query(collection(db, 'programs'), where('deptID', '==', visitorDeptId)))
-      .then(snap => setDeptPrograms(snap.docs
-        .map(d => ({ id: d.id, ...d.data() } as ProgramRecord))
-        .sort((a, b) => a.code.localeCompare(b.code))))
+      .then(snap => {
+        // Use PROGRAMS schema insertion order — Staff/Faculty always first, then programs as declared
+        const schemaOrder = (PROGRAMS[visitorDeptId] ?? []).map(p => p.code);
+        setDeptPrograms(
+          snap.docs
+            .map(d => ({ id: d.id, ...d.data() } as ProgramRecord))
+            .sort((a, b) => {
+              const ai = schemaOrder.indexOf(a.code);
+              const bi = schemaOrder.indexOf(b.code);
+              if (ai !== -1 && bi !== -1) return ai - bi;   // both in schema — use schema order
+              if (ai !== -1) return -1;
+              if (bi !== -1) return 1;
+              // Fallback: Staff/Faculty codes always first, then alpha
+              const aStaff = a.code.endsWith('-STAFF');
+              const bStaff = b.code.endsWith('-STAFF');
+              if (aStaff && !bStaff) return -1;
+              if (!aStaff && bStaff) return 1;
+              return a.name.localeCompare(b.name);
+            })
+        );
+      })
       .finally(() => setIsLoadingProgs(false));
   }, [visitorDeptId, db]);
 
@@ -180,6 +217,17 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         const data = userDoc.data() as UserRecord;
         if (data.status === 'blocked') {
           setBlockedStudent({ name: data.firstName || 'Student' });
+          // Log the blocked attempt for admin visibility
+          try {
+            const attemptRef = doc(collection(db, 'blocked_attempts'));
+            setDoc(attemptRef, {
+              studentId:   data.id || cleanId,
+              studentName: `${(data.lastName||'').toUpperCase()}, ${data.firstName||''}`,
+              deptID:      data.deptID || '',
+              program:     data.program || '',
+              timestamp:   new Date().toISOString(),
+            });
+          } catch { /* non-fatal */ }
           return;
         }
         const asStudent: StudentRecord = {
@@ -275,6 +323,16 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         const u = uSnap.docs[0].data() as UserRecord;
         if (u.status === 'blocked') {
           setBlockedStudent({ name: u.firstName || 'Student' });
+          try {
+            const attemptRef = doc(collection(db, 'blocked_attempts'));
+            setDoc(attemptRef, {
+              studentId:   u.id,
+              studentName: `${(u.lastName||'').toUpperCase()}, ${u.firstName||''}`,
+              deptID:      u.deptID || '',
+              program:     u.program || '',
+              timestamp:   new Date().toISOString(),
+            });
+          } catch { /* non-fatal */ }
           return;
         }
         const isAdmin = u.role === 'admin' || u.role === 'super_admin';
@@ -319,17 +377,24 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
       setIsVisitor(true);
       return;
     }
-    // Snapshot deptID + program at the exact moment of check-in.
-    // Historical logs are NEVER retroactively changed if the student
-    // later updates their Department or Program in the system.
-    addDocumentNonBlocking(collection(db, 'library_logs'), {
-      studentId:        identifiedStudent.studentId,
-      deptID:           identifiedStudent.deptID,
-      program:          (identifiedStudent as any).program ?? '',
-      checkInTimestamp: new Date().toISOString(),
-      purpose,
-      studentName: `${(identifiedStudent.lastName || '').toUpperCase()}, ${identifiedStudent.firstName}`,
-    });
+    // Document ID format: [timestamp]_[deptID]_[studentName]_[suffix]
+    // e.g. 2025-03-20T08-15-32.441Z_CICS_DELA_CRUZ-Juan_a3f9
+    // Snapshot deptID + program at check-in time so historical logs
+    // are never affected if the student later changes their dept/program.
+    const studentName = `${(identifiedStudent.lastName || '').toUpperCase()}, ${identifiedStudent.firstName}`;
+    const logDocId    = libraryLogId(studentName, identifiedStudent.deptID);
+    setDocumentNonBlocking(
+      doc(db, 'library_logs', logDocId),
+      {
+        studentId:        identifiedStudent.studentId,
+        deptID:           identifiedStudent.deptID,
+        program:          (identifiedStudent as any).program ?? '',
+        checkInTimestamp: new Date().toISOString(),
+        purpose,
+        studentName,
+      },
+      { merge: false }
+    );
     setLastAction('checkin');
     setStep('success');
   };

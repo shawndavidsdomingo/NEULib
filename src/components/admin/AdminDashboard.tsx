@@ -111,7 +111,7 @@ export default function AdminDashboard({ onExit, resolvedUser, onSwitchToStudent
                 Your administrator account has been blocked. You can still use the library kiosk as a regular visitor.
               </p>
               <p className="text-xs font-bold text-red-400 uppercase tracking-widest">
-                Contact a Super Administrator to resolve this.
+                Contact an Administrator to resolve this.
               </p>
             </div>
             <button onClick={onExit}
@@ -147,7 +147,7 @@ export default function AdminDashboard({ onExit, resolvedUser, onSwitchToStudent
             </p>
             <div className="p-4 rounded-xl text-left text-xs font-medium text-amber-700"
               style={{ background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.2)' }}>
-              Contact a Super Administrator to be added to the Staff Registry.
+              Contact an Administrator to be added to the Staff Registry.
             </div>
           </div>
           <button onClick={onExit}

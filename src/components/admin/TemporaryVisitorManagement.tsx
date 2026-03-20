@@ -7,11 +7,11 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Clock, CheckCircle, Edit3, Trash2, Loader2, ShieldAlert, GraduationCap, Building2, Search } from 'lucide-react';
+import { Clock, CheckCircle, Edit3, Trash2, Loader2, ShieldAlert, GraduationCap, Building2, Search, RotateCcw } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useFirestore, useCollection, useMemoFirebase, deleteDocumentNonBlocking, updateDocumentNonBlocking } from '@/firebase';
 import { collection, doc, query, where, getDocs, setDoc } from 'firebase/firestore';
-import { UserRecord, DepartmentRecord, ProgramRecord } from '@/lib/firebase-schema';
+import { UserRecord, DepartmentRecord, ProgramRecord, formatFullName } from '@/lib/firebase-schema';
 import { format } from 'date-fns';
 import { SuccessCard } from '@/components/ui/SuccessCard';
 
@@ -66,6 +66,17 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
     [db]
   );
   const { data: visitors, isLoading } = useCollection<UserRecord>(visitorsRef);
+
+  const isFiltersDirty = useMemo(() => 
+    search.trim() !== '' || deptFilter !== 'all' || programFilter !== 'all',
+    [search, deptFilter, programFilter]
+  );
+
+  const handleReset = () => {
+    setSearch('');
+    setDeptFilter('all');
+    setProgramFilter('all');
+  };
 
   const filtered = useMemo(() => {
     let list = (visitors || []);
@@ -197,6 +208,13 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
                 </h3>
                 <p className="text-slate-400 text-sm font-medium mt-0.5">
                   {filtered.length} awaiting verification
+                  {isFiltersDirty && (
+                    <button onClick={handleReset}
+                      className="ml-2 inline-flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-bold border transition-all active:scale-95"
+                      style={{background:'rgba(220,38,38,0.06)',color:'#dc2626',borderColor:'rgba(220,38,38,0.18)'}}>
+                      <RotateCcw size={9}/> Reset
+                    </button>
+                  )}
                 </p>
               </div>
             </div>

@@ -5,7 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { format, parseISO, isToday, differenceInMinutes, startOfDay } from 'date-fns';
-import { Loader2, Users, Search, Filter, Radio, Clock, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Loader2, Users, Search, Filter, Radio, Clock, ArrowUpDown, ArrowUp, ArrowDown, RotateCcw } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, orderBy, where } from 'firebase/firestore';
 import { LibraryLogRecord, DepartmentRecord } from '@/lib/firebase-schema';
@@ -36,9 +36,20 @@ export function CurrentVisitors() {
   const [sortDir,   setSortDir]   = useState<'asc' | 'desc'>('desc');
 
   const toggleSort = (field: typeof sortField) => {
-    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortDir('asc'); }
+    if (sortField !== field) { setSortField(field); setSortDir('asc'); return; }
+    if (sortDir === 'asc')   { setSortDir('desc'); return; }
+    setSortField('checkInTimestamp'); setSortDir('desc');
   };
+
+  const handleReset = () => {
+    setSearch(''); setDeptFilter('All Departments'); setProgramFilter('All Programs');
+    setPurposeFilter('All Purposes'); setStatusFilter('Inside');
+    setSortField('checkInTimestamp'); setSortDir('desc');
+  };
+
+  const isFiltersDirty = search !== '' || deptFilter !== 'All Departments' ||
+    programFilter !== 'All Programs' || purposeFilter !== 'All Purposes' ||
+    statusFilter !== 'Inside' || sortField !== 'checkInTimestamp' || sortDir !== 'desc';
 
   const SortIcon = ({ field }: { field: typeof sortField }) => {
     if (sortField !== field) return <ArrowUpDown size={11} className="ml-1 opacity-30 inline" />;
@@ -254,9 +265,18 @@ export function CurrentVisitors() {
             ))}
           </div>
 
-          <p className="text-slate-400 text-xs font-medium ml-auto">
-            {filteredLogs.length} record{filteredLogs.length !== 1 ? 's' : ''}
-          </p>
+          <div className="flex items-center gap-2 ml-auto">
+            <p className="text-slate-400 text-xs font-medium">
+              {filteredLogs.length} record{filteredLogs.length !== 1 ? 's' : ''}
+            </p>
+            {isFiltersDirty && (
+              <button onClick={handleReset}
+                className="flex items-center gap-1.5 h-8 px-2.5 rounded-xl text-xs font-bold border transition-all active:scale-95"
+                style={{background:'rgba(220,38,38,0.06)',color:'#dc2626',borderColor:'rgba(220,38,38,0.18)'}}>
+                <RotateCcw size={10}/> Reset
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -274,7 +294,16 @@ export function CurrentVisitors() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <Table>
+            <Table className="table-fixed w-full">
+              <colgroup>
+                <col style={{ width: '260px' }} />
+                <col style={{ width: '160px' }} />
+                <col style={{ width: '90px' }} />
+                <col style={{ width: '150px' }} />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '110px' }} />
+                <col style={{ width: '100px' }} />
+              </colgroup>
               <TableHeader>
                 <TableRow className="h-11 border-slate-100">
                   <TableHead className={`pl-5 cursor-pointer select-none hover:bg-slate-100 ${thStyle}`} onClick={() => toggleSort('studentName')}>
@@ -313,14 +342,14 @@ export function CurrentVisitors() {
                             style={{ background: isInside ? `linear-gradient(135deg,${navy},hsl(221,60%,35%))` : '#94a3b8' }}>
                             {(log.studentName || 'S').split(',')[0]?.trim()[0] || 'S'}
                           </div>
-                          <span className="font-semibold text-slate-900 text-base truncate max-w-[160px]">
+                          <span className="font-semibold text-slate-900 text-sm whitespace-nowrap">
                             {log.studentName || 'Scholar'}
                           </span>
                         </div>
                       </TableCell>
 
                       <TableCell>
-                        <span className="font-bold text-lg" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>
+                        <span className="font-bold text-sm" style={{ color: navy, fontFamily: "'DM Mono',monospace" }}>
                           {log.studentId}
                         </span>
                       </TableCell>

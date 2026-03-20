@@ -6,7 +6,7 @@ import { X, FileEdit, IdCard, GraduationCap, User, ChevronRight, Loader2, Shield
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
-import { collection, addDoc, query, where, doc, setDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, doc, setDoc, getDocs, limit } from 'firebase/firestore';
 import { credentialRequestId } from '@/lib/firestore-ids';
 import { UserRecord, DEPARTMENTS, ProgramRecord } from '@/lib/firebase-schema';
 import { formatStudentId } from '@/lib/student-id-formatter';
@@ -90,6 +90,16 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
           toast({ title: 'Invalid format', description: 'Format: YY-XXXXX-ZZZ', variant: 'destructive' });
           setSubmitting(false); return;
         }
+        if (newId.trim() === profile.id) {
+          toast({ title: 'Same as current ID', description: 'The new Student ID must be different from your current one.', variant: 'destructive' });
+          setSubmitting(false); return;
+        }
+        // Check if the requested ID already belongs to another user
+        const idExists = await getDocs(query(collection(db, 'users'), where('id', '==', newId.trim()), limit(1)));
+        if (!idExists.empty) {
+          toast({ title: 'Student ID already registered', description: 'This Student ID is already associated with another account. Please check your ID and try again.', variant: 'destructive' });
+          setSubmitting(false); return;
+        }
         if (!idReason.trim()) { toast({ title: 'Reason is required', variant: 'destructive' }); setSubmitting(false); return; }
         const credDocId = credentialRequestId();
         await setDoc(doc(db, 'credential_requests', credDocId), {
@@ -140,7 +150,7 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
           description={
             submittedType === 'admin_privilege'
               ? 'Your admin privilege request has been sent. Any active admin can review and approve it in the dashboard.'
-              : 'Your request has been sent to the administrator for review.'
+              : 'Your request has been sent to the administrator for review. You will be notified once it has been processed.'
           }
           onClose={onClose}
         />
@@ -284,24 +294,12 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
                     <SelectValue placeholder="Select department" />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl max-h-60">
-                    {(depts || [])
-                      .sort((a, b) => {
-                        // 1. Define Priority (LIBRARY = 0, Others = 1)
-                        const aPrio = a.deptID === 'LIBRARY' ? 0 : 1;
-                        const bPrio = b.deptID === 'LIBRARY' ? 0 : 1;
-
-                        // 2. Sort by Priority first
-                        if (aPrio !== bPrio) return aPrio - bPrio;
-
-                        // 3. Alphabetical fallback
-                        return a.deptID.localeCompare(b.deptID);
-                      })
-                      .map(d => (
-                        <SelectItem key={d.deptID} value={d.deptID} className="font-semibold text-sm">
-                          <span className="font-bold mr-2 text-xs" style={{ color: navy }}>[{d.deptID}]</span>
-                          {d.departmentName}
-                        </SelectItem>
-                      ))}
+                    {(depts || []).sort((a, b) => a.deptID.localeCompare(b.deptID)).map(d => (
+                      <SelectItem key={d.deptID} value={d.deptID} className="font-semibold text-sm">
+                        <span className="font-bold mr-2 text-xs" style={{ color: navy }}>[{d.deptID}]</span>
+                        {d.departmentName}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -313,16 +311,7 @@ export function CredentialRequestModal({ profile, onClose }: Props) {
                     <SelectValue placeholder={!newDept ? 'Select dept first' : 'Select program'} />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl max-h-60">
-                    {sortedPrograms.sort((a, b) => {
-                      // 1. Define Priority (Anything containing "STAFF" = 0, Others = 1)
-                      const aIsStaff = a.code.toUpperCase().includes('STAFF') ? 0 : 1;
-                      const bIsStaff = b.code.toUpperCase().includes('STAFF') ? 0 : 1;
-
-                      if (aIsStaff !== bIsStaff) return aIsStaff - bIsStaff;
-
-                      // 2. Sort alphabetically by program name for the rest
-                      return a.name.localeCompare(b.name);
-                    }).map(p => (
+                    {sortedPrograms.map(p => (
                       <SelectItem key={p.code} value={p.code} className="font-semibold text-sm">
                         <span className="font-bold mr-2 text-xs font-mono" style={{ color: navy }}>{p.code}</span>
                         {p.name}

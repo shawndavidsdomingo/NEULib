@@ -168,17 +168,14 @@ export function DepartmentManagement() {
     setSuccessCard({ title: 'Program Updated', description: 'Changes saved successfully.', color: 'navy' });
   };
 
-  // ─── UPDATED SORTING LOGIC ───
   const filteredDepts = (depts || [])
     .filter(d =>
       d.deptID.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.departmentName.toLowerCase().includes(searchTerm.toLowerCase())
     )
     .sort((a, b) => {
-      // 1. Force LIBRARY to the top
       if (a.deptID === 'LIBRARY') return -1;
       if (b.deptID === 'LIBRARY') return 1;
-      // 2. Everything else A-Z
       return a.deptID.localeCompare(b.deptID);
     });
 
@@ -211,7 +208,7 @@ export function DepartmentManagement() {
                   placeholder="Search registry..." 
                   value={searchTerm} 
                   onChange={e => setSearchTerm(e.target.value)}
-                  className="pl-9 w-44 h-9 bg-slate-50 border-slate-200 rounded-xl text-sm" 
+                  className="pl-9 w-64 h-9 bg-slate-50 border-slate-200 rounded-xl text-sm" 
                 />
               </div>
               <button onClick={handleSeedDepts} className="h-9 px-3 rounded-xl border text-xs font-bold flex gap-2 items-center" style={{ color: navy }}>
@@ -266,7 +263,7 @@ export function DepartmentManagement() {
                     className="cursor-pointer hover:bg-slate-50/50 transition-colors"
                     onClick={() => setExpandedDept(isExpanded ? null : d.deptID)}
                   >
-                    <TableCell className="pl-6 font-bold text-navy">{d.deptID}</TableCell>
+                    <TableCell className="pl-6"><span className="font-bold whitespace-nowrap" style={{color:'hsl(221,72%,22%)',fontFamily:"'DM Mono',monospace"}}>{d.deptID}</span></TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -282,7 +279,7 @@ export function DepartmentManagement() {
                   </TableRow>,
                   
                   ...(isExpanded ? [
-                    <TableRow key={`${d.deptID}-expanded`} className="bg-slate-50/30">
+                    <TableRow key={`${d.deptID}-expanded`} className="bg-slate-50/30 hover:bg-slate-50/30">
                       <TableCell colSpan={4} className="p-6">
                         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                           <div className="flex justify-between items-center mb-4">
@@ -290,26 +287,25 @@ export function DepartmentManagement() {
                           </div>
                           
                           <div className="flex gap-2 mb-4">
-                            <Input placeholder="Code" value={newProgCode} onChange={e => setNewProgCode(e.target.value.toUpperCase())} className="w-24 h-9 font-bold" />
+                            <Input placeholder="Code" value={newProgCode} onChange={e => setNewProgCode(e.target.value.toUpperCase())} className="w-32 h-9 font-bold" />
                             <Input placeholder="Program Name" value={newProgName} onChange={e => setNewProgName(e.target.value)} className="flex-1 h-9" />
                             <button onClick={handleAddProgram} className="px-4 h-9 bg-emerald-600 text-white rounded-lg text-xs font-bold">Add</button>
                           </div>
 
-                          <table className="w-full text-sm">
-                            <tbody className="divide-y">
-                              {deptPrograms.map(p => (
-                                <tr key={p.id} className="group">
-                                  <td className="py-3 font-bold w-24">{p.code}</td>
-                                  <td className="py-3 text-slate-600">{p.name}</td>
-                                  <td className="py-3 text-right">
-                                    <button onClick={() => handleDeleteProgram(p.id, p.name)} className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all">
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                          <div className="space-y-1">
+                            {deptPrograms.map(p => (
+                              <div key={p.id} className="group flex items-center gap-2 py-2 px-1 hover:bg-slate-50 rounded-lg transition-colors">
+                                {/* Fixed width and whitespace-nowrap keeps the code on one line */}
+                                <div className="w-32 font-bold whitespace-nowrap text-sm shrink-0 uppercase">{p.code}</div>
+                                <div className="flex-1 text-slate-600 text-sm truncate">{p.name}</div>
+                                <div className="shrink-0">
+                                  <button onClick={() => handleDeleteProgram(p.id, p.name)} className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all">
+                                    <Trash2 size={14} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       </TableCell>
                     </TableRow>

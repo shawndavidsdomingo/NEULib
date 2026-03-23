@@ -1,37 +1,60 @@
 "use client";
 
 import { useMemo } from 'react';
+import { StudentAvatar } from '@/components/ui/StudentAvatar';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { format, parseISO, startOfDay } from 'date-fns';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Activity, Loader2 } from 'lucide-react';
+import { Activity, Loader2, GitBranch } from 'lucide-react';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { collection, query, orderBy, limit, where } from 'firebase/firestore';
 import { LibraryLogRecord, DEPARTMENTS } from '@/lib/firebase-schema';
 
 const navy = 'hsl(221,72%,22%)';
 
-export function LiveFeed() {
+export function LiveFeed({ branchId }: { branchId?: string | null }) {
   const db = useFirestore();
+
+  // Branch name lookup
+  const branchesRef = useMemoFirebase(() => collection(db, 'branches'), [db]);
+  const { data: allBranches } = useCollection<{ id: string; name: string }>(branchesRef);
+  const branchNameMap = useMemo(
+    () => Object.fromEntries((allBranches || []).map(b => [b.id, b.name])),
+    [allBranches]
+  );
 
   const todayStart = useMemo(() => startOfDay(new Date()).toISOString(), []);
 
-  const logsQuery = useMemoFirebase(() => {
-    return query(
-      collection(db, 'library_logs'),
-      where('checkInTimestamp', '>=', todayStart),
-      orderBy('checkInTimestamp', 'desc'),
-      limit(100)
-    );
-  }, [db, todayStart]);
+  const logsQuery = useMemoFirebase(() => query(
+    collection(db, 'library_logs'),
+    where('checkInTimestamp', '>=', todayStart),
+    orderBy('checkInTimestamp', 'desc'),
+    limit(200)
+  ), [db, todayStart]);
 
   const { data: todayAllLogs, isLoading } = useCollection<LibraryLogRecord>(logsQuery);
 
-  // Filters to only show those who haven't tapped out
-  const recentLogs = useMemo(() => 
-    todayAllLogs?.filter(l => !l.checkOutTimestamp) ?? [], 
-    [todayAllLogs]
+  // Client-side: open sessions only, filtered by branch
+  const recentLogs = useMemo(() =>
+    (todayAllLogs ?? []).filter(l => {
+      if (l.checkOutTimestamp) return false;
+      if (branchId && (l as any).branchId && (l as any).branchId !== branchId) return false;
+      return true;
+    }),
+    [todayAllLogs, branchId]
   );
+
+  // For "All Branches" view — build a branch label map from the logs themselves
+  const branchLabelMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    (todayAllLogs ?? []).filter(l => !l.checkOutTimestamp).forEach(l => {
+      const bid = (l as any).branchId;
+      if (bid) map[bid] = (map[bid] || 0) + 1;
+    });
+    return map;
+  }, [todayAllLogs]);
+
+  const showBranchColumn = !branchId && Object.keys(branchLabelMap).length > 1;
 
   return (
     <Card className="school-card bg-white/40 border-slate-200/60 rounded-3xl overflow-hidden shadow-sm backdrop-blur-md">
@@ -52,6 +75,9 @@ export function LiveFeed() {
             </div>
             <CardDescription className="text-xs font-medium text-slate-500 uppercase tracking-wider">
               {recentLogs.length} {recentLogs.length === 1 ? 'Person' : 'People'} currently inside
+              {!branchId && Object.keys(branchLabelMap).length > 1 && (
+                <span className="ml-2 normal-case font-semibold text-slate-400">· All Branches</span>
+              )}
             </CardDescription>
           </div>
         </div>
@@ -73,27 +99,30 @@ export function LiveFeed() {
           ) : (
             <div className="divide-y divide-slate-50">
               {/* Table Header */}
-              <div className="grid grid-cols-[2fr_1fr_1fr] sm:grid-cols-[2fr_1fr_1fr_1fr] gap-2 px-5 py-2 bg-slate-50/50 sticky top-0 z-10 backdrop-blur-sm">
+              <div className={`grid gap-2 px-5 py-2 bg-slate-50/50 sticky top-0 z-10 backdrop-blur-sm ${showBranchColumn ? 'grid-cols-[2fr_1fr_1fr_1fr]' : 'grid-cols-[2fr_1fr_1fr_1fr]'}`}>
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Visitor</span>
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Purpose</span>
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hidden sm:block">ID Number</span>
+                {showBranchColumn
+                  ? <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Branch</span>
+                  : <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hidden sm:block">ID Number</span>
+                }
                 <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400 text-right">Entry</span>
               </div>
 
               {/* List Items */}
               {recentLogs.map((log) => {
                 const isStaff = log.deptID === 'LIBRARY' || log.studentId.toUpperCase().includes('STAFF');
-                
+                const logBranchId = (log as any).branchId as string | undefined;
+
                 return (
-                  <div key={log.id} className="grid grid-cols-[2fr_1fr_1fr] sm:grid-cols-[2fr_1fr_1fr_1fr] gap-2 px-5 py-3.5 items-center hover:bg-slate-50/80 transition-colors group">
+                  <div key={log.id} className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-2 px-5 py-3.5 items-center hover:bg-slate-50/80 transition-colors group">
                     {/* Name + Dept */}
                     <div className="flex items-center gap-3 min-w-0">
-                      <div 
-                        className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-xs flex-shrink-0 shadow-sm"
-                        style={{ background: isStaff ? 'linear-gradient(135deg, #64748b, #475569)' : `linear-gradient(135deg, ${navy}, #3b82f6)` }}
-                      >
-                        {(log.studentName || 'S').charAt(0)}
-                      </div>
+                      <StudentAvatar
+                        name={log.studentName || 'S'}
+                        avatarUrl={(log as any).avatarUrl}
+                        fallbackBg={isStaff ? 'linear-gradient(135deg,#64748b,#475569)' : `linear-gradient(135deg,${navy},#3b82f6)`}
+                      />
                       <div className="min-w-0">
                         <p className="font-bold text-sm text-slate-900 truncate leading-none mb-1">
                           {log.studentName || 'Scholar'}
@@ -111,17 +140,26 @@ export function LiveFeed() {
                       </span>
                     </div>
 
-                    {/* ID — desktop only */}
-                    <span className="text-xs font-bold text-slate-400 hidden sm:block group-hover:text-slate-600 transition-colors" style={{ fontFamily: "'DM Mono',monospace" }}>
-                      {log.studentId}
-                    </span>
+                    {/* Branch (all-branches view) OR Student ID */}
+                    {showBranchColumn ? (
+                      <div className="flex items-center gap-1">
+                        <GitBranch size={10} className="text-slate-300 flex-shrink-0" />
+                        <span className="text-xs font-bold truncate" style={{ color: navy }}>
+                          {logBranchId ? (branchNameMap[logBranchId] ?? logBranchId) : '—'}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-xs font-bold text-slate-400 hidden sm:block group-hover:text-slate-600 transition-colors font-mono">
+                        {log.studentId}
+                      </span>
+                    )}
 
                     {/* Time In */}
                     <div className="text-right">
-                      <p className="text-xs font-bold text-slate-900" style={{ color: navy }}>
+                      <p className="text-xs font-bold" style={{ color: navy }}>
                         {format(parseISO(log.checkInTimestamp), 'h:mm a')}
                       </p>
-                      <p className="text-[9px] font-medium text-slate-400 uppercase">Just now</p>
+                      <p className="text-[9px] font-medium text-slate-400 uppercase">Today</p>
                     </div>
                   </div>
                 );

@@ -37,15 +37,15 @@ export function ImportStudentDialog({ open, onOpenChange }: ImportStudentDialogP
   const { data: dbDepartments } = useCollection<DepartmentRecord>(deptQuery);
 
   // The exact columns used in both import and export
-  const IMPORT_HEADERS = ['id', 'firstName', 'middleName', 'lastName', 'email', 'deptID', 'program'];
+  const IMPORT_HEADERS = ['id', 'firstName', 'middleName', 'lastName', 'email', 'deptID', 'program', 'role', 'status'];
   const REQUIRED = ['id', 'firstName', 'lastName', 'deptID'];
 
   const handleDownloadTemplate = () => {
     const dept = selectedDept && selectedDept !== 'MASTER' ? selectedDept : 'CICS';
     const rows = [
       IMPORT_HEADERS.join(','),
-      `24-00001-001,Juan,Dela,Cruz,juan.cruz@neu.edu.ph,${dept},BSIT`,
-      `24-00002-002,Maria,,Santos,maria.santos@neu.edu.ph,${dept},BSCS`,
+      `24-00001-001,Juan,Dela,Cruz,juan.cruz@neu.edu.ph,${dept},BSIT,student,active`,
+      `24-00002-002,Maria,,Santos,maria.santos@neu.edu.ph,${dept},BSCS,student,active`,
     ].join('\n');
     const blob = new Blob([rows], { type: 'text/csv' });
     const url  = URL.createObjectURL(blob);
@@ -148,6 +148,12 @@ export function ImportStudentDialog({ open, onOpenChange }: ImportStudentDialogP
           if (!/^\d{2}-\d{5}-\d{3}$/.test(id)) { skipCount++; continue; }
 
           const userRef = doc(db, 'users', id);
+          // role: only allow 'student' or 'admin' from CSV — ignore other values for safety
+          const rawRole   = get('role').toLowerCase();
+          const safeRole  = rawRole === 'admin' ? 'admin' : 'student';
+          const rawStatus = get('status').toLowerCase();
+          const safeStatus= rawStatus === 'blocked' ? 'blocked' : 'active';
+
           setDocumentNonBlocking(userRef, {
             id,
             firstName,
@@ -156,8 +162,9 @@ export function ImportStudentDialog({ open, onOpenChange }: ImportStudentDialogP
             email:      get('email') || '',
             deptID,
             program:    get('program') || '',
-            role:       'student',
-            status:     'active',
+            role:       safeRole,
+            status:     safeStatus,
+            addedAt:    new Date().toISOString(),
           }, { merge: true });
           successCount++;
         }
@@ -225,9 +232,11 @@ export function ImportStudentDialog({ open, onOpenChange }: ImportStudentDialogP
                   {IMPORT_HEADERS.join(',')}
                 </code>
                 <ul className="text-[11px] text-slate-500 space-y-0.5 font-medium">
-                  <li><span className="font-bold text-slate-700">id</span> — Student ID: YY-XXXXX-ZZZ</li>
+                  <li><span className="font-bold text-slate-700">id</span> — YY-XXXXX-ZZZ format</li>
                   <li><span className="font-bold text-slate-700">middleName</span> — Optional, leave blank</li>
                   <li><span className="font-bold text-slate-700">program</span> — Program code (e.g. BSIT)</li>
+                  <li><span className="font-bold text-slate-700">role</span> — student or admin (default: student)</li>
+                  <li><span className="font-bold text-slate-700">status</span> — active or blocked (default: active)</li>
                 </ul>
               </div>
             </div>

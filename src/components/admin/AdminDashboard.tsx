@@ -13,9 +13,10 @@ interface AdminDashboardProps {
   onExit?: () => void;
   resolvedUser?: UserRecord | null;
   onSwitchToStudent?: () => void;
+  suppressBranchPicker?: boolean;
 }
 
-export default function AdminDashboard({ onExit, resolvedUser, onSwitchToStudent }: AdminDashboardProps) {
+export default function AdminDashboard({ onExit, resolvedUser, onSwitchToStudent, suppressBranchPicker }: AdminDashboardProps) {
   const { user, isUserLoading } = useUser();
   const db = useFirestore();
 
@@ -169,6 +170,7 @@ export default function AdminDashboard({ onExit, resolvedUser, onSwitchToStudent
         user={user}
         isSuperAdmin={isSuperAdmin}
         onSwitchToStudent={onSwitchToStudent}
+        suppressBranchPicker={suppressBranchPicker}
       />
 
       {/* Real-time blocked popup — shown when an active admin gets blocked */}

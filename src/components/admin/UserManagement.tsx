@@ -1,5 +1,7 @@
 "use client";
 
+import { StudentAvatar } from '@/components/ui/StudentAvatar';
+
 import { useState, useMemo, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -21,6 +23,7 @@ import { SuccessCard } from '@/components/ui/SuccessCard';
 interface UserManagementProps { isSuperAdmin: boolean; }
 
 const navy = 'hsl(221,72%,22%)';
+const thCls = 'text-[10px] font-extrabold uppercase tracking-widest text-slate-400 bg-slate-50 px-4 py-3 cursor-pointer select-none hover:bg-slate-100 transition-colors whitespace-nowrap text-left';
 
 type SortField = 'id' | 'lastName' | 'deptID' | 'program' | 'role' | 'status';
 
@@ -81,10 +84,19 @@ function ProfileModal({
 
         {/* Header */}
         <div className="px-7 pt-6 pb-5 flex items-start gap-4 border-b border-slate-100">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center font-bold text-xl text-white flex-shrink-0 shadow-lg"
-            style={{ background: isBlocked ? '#94a3b8' : `linear-gradient(135deg,${accentColor},${accentColor}bb)` }}>
-            {initials}
-          </div>
+          {(s as any).avatarUrl ? (
+            <div className="relative w-16 h-16 flex-shrink-0">
+              <img src={(s as any).avatarUrl} alt={initials}
+                className="w-16 h-16 rounded-2xl object-cover shadow-lg"
+                style={{ border: `2px solid ${accentColor}40` }}
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+            </div>
+          ) : (
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center font-bold text-xl text-white flex-shrink-0 shadow-lg"
+              style={{ background: isBlocked ? '#94a3b8' : `linear-gradient(135deg,${accentColor},${accentColor}bb)` }}>
+              {initials}
+            </div>
+          )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1">
               <span className={`text-[10px] font-extrabold uppercase tracking-widest px-2.5 py-0.5 rounded-full flex items-center gap-1 w-fit ${isBlocked ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>
@@ -364,17 +376,35 @@ export function UserManagement({ isSuperAdmin }: UserManagementProps) {
 
   const exportCSV = () => {
     if (!students?.length) { toast({ title: 'No data', variant: 'destructive' }); return; }
-    const hdrs = ['id','firstName','middleName','lastName','email','deptID','program','role','status'];
-    const rows = students.map(s => [s.id,s.firstName||'',s.middleName||'',s.lastName||'',s.email||'',s.deptID||'',s.program||'',s.role||'',s.status||'']);
-    const csv  = [hdrs,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    // Columns match ImportStudentDialog IMPORT_HEADERS for round-trip CSV compatibility.
+    // role, status, addedAt appended after — import ignores unknown columns gracefully.
+    const hdrs = ['id','firstName','middleName','lastName','email','deptID','program','role','status','addedAt'];
+    const rows = students.map(s => [
+      s.id,
+      s.firstName  || '',
+      s.middleName || '',
+      s.lastName   || '',
+      s.email      || '',
+      s.deptID     || '',
+      s.program    || '',
+      s.role       || 'student',
+      s.status     || 'active',
+      (s as any).addedAt ? new Date((s as any).addedAt).toLocaleDateString('en-PH') : '',
+    ]);
+    const escape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const csv    = [hdrs, ...rows].map(r => r.map(v => escape(String(v))).join(',')).join('\n');
+    // UTF-8 BOM so Excel opens it correctly without garbled characters
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a'); a.href=url; a.download=`NEU_Registry_${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `NEU_Registry_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
     URL.revokeObjectURL(url);
-    setSuccessCard({ title:'CSV Exported', description:`${students.length} records downloaded.`, color:'navy' });
+    setSuccessCard({ title: 'CSV Exported', description: `${students.length} records downloaded.`, color: 'navy' });
   };
 
-  const thStyle = 'font-bold text-xs uppercase tracking-wide text-slate-500 select-none cursor-pointer hover:bg-slate-100/60 transition-colors';
+  const thStyle = 'text-[10px] font-extrabold uppercase tracking-widest text-slate-400 bg-slate-50 px-4 py-3 cursor-pointer select-none hover:bg-slate-100 transition-colors whitespace-nowrap';
 
   return (
     <>
@@ -497,9 +527,10 @@ export function UserManagement({ isSuperAdmin }: UserManagementProps) {
 
           <CardContent className="p-0">
             <div className="overflow-x-auto">
-              <Table>
+              <div style={{ minWidth: 900 }}>
+                <Table>
                 <TableHeader className="bg-slate-50/70">
-                  <TableRow className="border-b border-slate-100 h-12">
+                  <TableRow className="border-b border-slate-100 h-11">
                     <TableHead className={`pl-5 ${thStyle}`} onClick={()=>toggleSort('lastName')}>
                       Student <SortIcon field="lastName"/>
                     </TableHead>
@@ -543,15 +574,18 @@ export function UserManagement({ isSuperAdmin }: UserManagementProps) {
                       <TableRow key={s.id}
                         onClick={()=>setProfileUser(s)}
                         className="border-b border-slate-50 hover:bg-blue-50/30 transition-colors cursor-pointer"
-                        style={{height:'68px'}}>
+                        style={{height:'76px'}}>
 
                         {/* Name — no truncation */}
-                        <TableCell className="pl-5">
+                        <TableCell className="pl-5" style={{minWidth:220}}>
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
-                              style={{background:isBlocked?'#94a3b8':`linear-gradient(135deg,${navy},hsl(221,60%,35%))`}}>
-                              {(s.firstName||'S')[0]}{(s.lastName||'S')[0]}
-                            </div>
+                            <StudentAvatar
+                              name={`${s.firstName || ''} ${s.lastName || ''}`}
+                              avatarUrl={(s as any).avatarUrl}
+                              size={40}
+                              radius="12px"
+                              fallbackBg={isBlocked ? '#94a3b8' : `linear-gradient(135deg,${navy},hsl(221,60%,35%))`}
+                            />
                             <div>
                               <p className="font-bold text-slate-900 text-sm leading-tight">{formatFullName(s)}</p>
                               <p className="text-slate-400 text-xs font-medium mt-0.5">{s.email}</p>
@@ -570,14 +604,14 @@ export function UserManagement({ isSuperAdmin }: UserManagementProps) {
                           </span>
                         </TableCell>
 
-                        <TableCell className="hidden md:table-cell">
+                        <TableCell className="hidden md:table-cell" style={{minWidth:220, maxWidth:280}}>
                           {programEntry ? (
                             <div className="flex flex-col gap-0.5">
                               <span className="font-bold text-xs px-2.5 py-1 rounded-lg w-fit whitespace-nowrap"
                                 style={{background:'hsl(262,83%,58%,0.1)',color:'hsl(262,83%,45%)',fontFamily:"'DM Mono',monospace"}}>
                                 {programEntry.code}
                               </span>
-                              <span className="text-slate-500 text-xs font-medium leading-tight">{programEntry.name}</span>
+                              <span className="text-slate-500 text-xs font-medium leading-snug mt-0.5 block">{programEntry.name}</span>
                             </div>
                           ) : s.program ? (
                             <span className="text-slate-400 text-xs font-medium italic">{s.program}</span>
@@ -628,7 +662,8 @@ export function UserManagement({ isSuperAdmin }: UserManagementProps) {
                     );
                   })}
                 </TableBody>
-              </Table>
+                </Table>
+              </div>
             </div>
           </CardContent>
         </Card>

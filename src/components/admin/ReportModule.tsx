@@ -1,5 +1,6 @@
 "use client";
 
+import { StudentAvatar } from '@/components/ui/StudentAvatar';
 import { useState, useMemo } from 'react';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -23,6 +24,17 @@ import { LibraryLogRecord, DepartmentRecord, ProgramRecord } from '@/lib/firebas
 type LogRecord = LibraryLogRecord & { program?: string };
 import { SuccessCard } from '@/components/ui/SuccessCard';
 
+// Safe ISO parser — returns null instead of throwing on invalid/empty strings
+function safeParseISO(ts: string | null | undefined): Date | null {
+  if (!ts) return null;
+  try {
+    const d = parseISO(ts);
+    if (isNaN(d.getTime())) return null;
+    return d;
+  } catch { return null; }
+}
+
+
 const PRESETS = [
   { label: 'Today',      getStart: () => format(new Date(), 'yyyy-MM-dd'),                             getEnd: () => format(new Date(), 'yyyy-MM-dd') },
   { label: 'This Week',  getStart: () => format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'), getEnd: () => format(new Date(), 'yyyy-MM-dd') },
@@ -30,7 +42,7 @@ const PRESETS = [
   { label: 'All Time',   getStart: () => '2024-01-01',                                                  getEnd: () => format(new Date(), 'yyyy-MM-dd') },
 ];
 
-interface ReportModuleProps { isSuperAdmin: boolean; }
+interface ReportModuleProps { isSuperAdmin: boolean; branchId?: string | null; }
 
 const navy = 'hsl(221,72%,22%)';
 const card: React.CSSProperties = {
@@ -45,7 +57,7 @@ const navyBtn: React.CSSProperties = {
   color: 'white', border: 'none',
 };
 
-export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
+export function ReportModule({ isSuperAdmin, branchId }: ReportModuleProps) {
   const [startDate,     setStartDate]     = useState(format(startOfWeek(new Date(), { weekStartsOn: 1 }), 'yyyy-MM-dd'));
   const [endDate,       setEndDate]       = useState(format(new Date(), 'yyyy-MM-dd'));
   const [activePreset,  setActivePreset]  = useState<string>('This Week');
@@ -65,6 +77,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
   const [rowsPerPage,      setRowsPerPage]      = useState<number>(50);
   const [currentPage,      setCurrentPage]      = useState(1);
   const [tapOutFilter,  setTapOutFilter]  = useState<'all' | 'no_tap' | 'with_timeout'>('all');
+  const [roleFilter,    setRoleFilter]    = useState<'all' | 'student' | 'staff'>('all');
   const [archiveSearch,    setArchiveSearch]    = useState('');
   const [archiveSortField, setArchiveSortField] = useState<'checkInTimestamp' | 'studentName' | 'deptID' | 'purpose' | 'duration' | 'studentId' | 'checkOutTimestamp' | 'program'>('checkInTimestamp');
   const [archiveSortOrder, setArchiveSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -92,9 +105,16 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
   const { data: dbDepartments } = useCollection<DepartmentRecord>(deptQuery);
 
   const usersRef = useMemoFirebase(() => collection(db, 'users'), [db]);
-  const { data: allUsers } = useCollection<{ id: string; program?: string; deptID?: string; status?: string }>(usersRef);
+  const { data: allUsers } = useCollection<{ id: string; role?: string; program?: string; deptID?: string; status?: string }>(usersRef);
 
   // Map studentId → program and status (for enriching + filtering log rows)
+  // Map studentId → role for role filtering
+  const userRoleMap = useMemo(() => {
+    const m: Record<string, string> = {};
+    (allUsers || []).forEach(u => { if (u.id) m[u.id] = u.role || 'student'; });
+    return m;
+  }, [allUsers]);
+
   const userProgramMap = useMemo(() => {
     const m: Record<string, string> = {};
     (allUsers || []).forEach(u => { if (u.id && u.program) m[u.id] = u.program; });
@@ -145,7 +165,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
   const handleResetFilters = () => {
     const def = PRESETS.find(p => p.label === 'This Week') ?? PRESETS[0];
     setStartDate(def.getStart()); setEndDate(def.getEnd()); setActivePreset(def.label);
-    setDeptFilter('All Departments'); setProgramFilter('All Programs');
+    setDeptFilter('All Departments'); setProgramFilter('All Programs'); setRoleFilter('all');
     setPurposeFilter('All Purposes'); setTapOutFilter('all');
     setUserStatusFilter('active'); setArchiveSearch('');
     setArchiveSortField('checkInTimestamp'); setArchiveSortOrder('desc');
@@ -162,11 +182,21 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
     deptFilter !== 'All Departments' || programFilter !== 'All Programs' ||
     purposeFilter !== 'All Purposes' || tapOutFilter !== 'all'           ||
     userStatusFilter !== 'active'    || archiveSearch.trim() !== ''      ||
+    roleFilter !== 'all'              ||
     archiveSortField !== 'checkInTimestamp' || archiveSortOrder !== 'desc';
 
   // Button 2 (archive header): appears only when sort is changed — resets sort only
   const isSortDirty =
     archiveSortField !== 'checkInTimestamp' || archiveSortOrder !== 'desc';
+
+  // Branch names for display and PDF
+  const branchesRef2 = useMemoFirebase(() => collection(db, 'branches'), [db]);
+  const { data: branches2 } = useCollection<{ id: string; name: string }>(branchesRef2);
+  const branchNames2 = useMemo(
+    () => Object.fromEntries((branches2 || []).map(b => [b.id, b.name])),
+    [branches2]
+  );
+  const activeBranchName = branchId ? (branchNames2[branchId] ?? branchId) : 'All Branches';
 
   const logsRef = useMemoFirebase(() => collection(db, 'library_logs'), [db]);
   const { data: allLogs, isLoading } = useCollection<LibraryLogRecord>(logsRef);
@@ -188,14 +218,22 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       // user record for old logs that haven't been backfilled yet
       const logProgram = (l as LogRecord).program || userProgramMap[l.studentId] || '';
       const inProgram = programFilter === 'All Programs' || logProgram === programFilter;
+      // Role filter
+      const userRole  = userRoleMap?.[l.studentId] || 'student';
+      const isStaffLog = userRole === 'admin' || userRole === 'super_admin' ||
+        l.deptID === 'LIBRARY' || (l.deptID || '').toUpperCase().includes('STAFF');
+      const inRole = roleFilter === 'all'
+        || (roleFilter === 'staff'   &&  isStaffLog)
+        || (roleFilter === 'student' && !isStaffLog);
       // filteredLogs always contains ALL successful sessions (historical snapshots).
       // The userStatusFilter drives whether we show blocked_attempts (separate collection).
       // ACTIVE: show all successful sessions (historical — never hide them).
       // ALL:    show successful + blocked attempts (unified model, built below).
       // BLOCKED: show only blocked_attempts (handled separately, not in filteredLogs).
-      return inRange && inDept && inPurpose && inTapOut && inProgram;
+      const inBranch = !branchId || (l as any).branchId === branchId || !(l as any).branchId;
+      return inRange && inDept && inPurpose && inTapOut && inProgram && inBranch && inRole;
     }).sort((a, b) => b.checkInTimestamp.localeCompare(a.checkInTimestamp)),
-    [allLogs, startDate, endDate, deptFilter, purposeFilter, programFilter, tapOutFilter, userProgramMap]
+    [allLogs, startDate, endDate, deptFilter, purposeFilter, programFilter, tapOutFilter, userProgramMap, branchId, roleFilter]
   );
 
   const displayedLogs = useMemo(() => {
@@ -261,7 +299,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         if (field === 'checkOutTimestamp')  return l.checkOutTimestamp || '';
         if (field === 'duration') {
           if (!l.checkOutTimestamp) return 0;
-          return differenceInMinutes(parseISO(l.checkOutTimestamp), parseISO(l.checkInTimestamp));
+          return differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), safeParseISO(l.checkInTimestamp) ?? new Date());
         }
         return '';
       };
@@ -334,7 +372,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       if (!counts[l.studentId]) counts[l.studentId] = { name: l.studentName || l.studentId, dept: l.deptID, visits: 0, totalMins: 0 };
       counts[l.studentId].visits++;
       if (l.checkOutTimestamp)
-        counts[l.studentId].totalMins += differenceInMinutes(parseISO(l.checkOutTimestamp), parseISO(l.checkInTimestamp));
+        counts[l.studentId].totalMins += differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), safeParseISO(l.checkInTimestamp) ?? new Date());
     });
     return Object.values(counts).sort((a, b) => b.visits - a.visits).slice(0, 5);
   }, [filteredLogs]);
@@ -394,7 +432,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
     // Avg duration
     const completed = logs.filter(l => l.checkOutTimestamp);
     const avgMins = completed.length
-      ? Math.round(completed.reduce((s, l) => s + differenceInMinutes(parseISO(l.checkOutTimestamp!), parseISO(l.checkInTimestamp)), 0) / completed.length)
+      ? Math.round(completed.reduce((s, l) => s + differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), safeParseISO(l.checkInTimestamp) ?? new Date()), 0) / completed.length)
       : null;
     const avgDurStr = avgMins !== null
       ? (avgMins >= 60 ? `${Math.floor(avgMins/60)}h ${avgMins%60}m` : `${avgMins}m`)
@@ -512,7 +550,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
           pdf.setFontSize(8.5); pdf.setFont('helvetica', 'normal');
           pdf.setTextColor(...SLATE);
           pdf.text(`NEU Library  |  ${reportLabel}  |  ${format(new Date(), 'MMM d, yyyy')}`, 14, 292);
-          pdf.text(`Page ${i} of ${total}`, W - 14, 292, { align: 'right' });
+          pdf.text(`Page ${i} of ${total}`, W - 5, 292, { align: 'right' });
         }
       };
 
@@ -582,20 +620,20 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       const drawTOC = (items: string[], startY: number): number => {
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold');
         pdf.setTextColor(...NAVY);
-        pdf.text('Table of Contents', 14, startY); startY += 7;
+        pdf.text('Table of Contents', 5, startY); startY += 7;
         pdf.setFontSize(8); pdf.setFont('helvetica', 'normal');
         pdf.setTextColor(...SLATE);
         items.forEach((label, i) => {
           const num = `${i + 1}.`;
-          pdf.text(num, 14, startY);
+          pdf.text(num, 5, startY);
           pdf.text(label, 22, startY);
           const dotStart = 22 + pdf.getTextWidth(label) + 2;
           for (let x = dotStart; x < W - 24; x += 2) pdf.text('.', x, startY);
-          pdf.text('1', W - 14, startY, { align: 'right' });
+          pdf.text('1', W - 5, startY, { align: 'right' });
           startY += 6;
         });
         pdf.setDrawColor(...NAVY); pdf.setLineWidth(0.3);
-        pdf.line(14, startY, W - 14, startY);
+        pdf.line(5, startY, W - 5, startY);
         return startY + 8;
       };
 
@@ -610,18 +648,18 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       ): number => {
         if (days.length === 0) {
           pdf.setFontSize(8); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(...SLATE);
-          pdf.text('No data for this period.', 14, startY);
+          pdf.text('No data for this period.', 5, startY);
           return startY + 8;
         }
-        const CHART_H = 38; const CHART_W = W - 28;
+        const CHART_H = 38; const CHART_W = W - 10;
         const maxCount = Math.max(...days.map(d => d[1]), 1);
         const barW = Math.min((CHART_W / days.length) - 2, 18);
         const gap  = CHART_W / days.length;
         // Background
         pdf.setFillColor(248, 250, 252);
-        pdf.roundedRect(14, startY, CHART_W, CHART_H, 2, 2, 'F');
+        pdf.roundedRect(5, startY, CHART_W, CHART_H, 2, 2, 'F');
         pdf.setDrawColor(220, 225, 235); pdf.setLineWidth(0.2);
-        pdf.roundedRect(14, startY, CHART_W, CHART_H, 2, 2, 'S');
+        pdf.roundedRect(5, startY, CHART_W, CHART_H, 2, 2, 'S');
         // Grid
         [0.25, 0.5, 0.75].forEach(f => {
           const gy = startY + CHART_H - f * (CHART_H - 8) - 4;
@@ -678,7 +716,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
       ): number => {
         if (days.length === 0 && Object.keys(deniedByDay).length === 0) {
           pdf.setFontSize(8); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(...SLATE);
-          pdf.text('No data for this period.', 14, startY);
+          pdf.text('No data for this period.', 5, startY);
           return startY + 8;
         }
         // Merge all day keys
@@ -686,14 +724,14 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
           ...days.map(d => d[0]),
           ...Object.keys(deniedByDay),
         ])).sort();
-        const CHART_H = 40; const CHART_W = W - 28;
+        const CHART_H = 40; const CHART_W = W - 10;
         const maxCount = Math.max(...allDayKeys.map(k => (days.find(d => d[0] === k)?.[1] || 0) + (deniedByDay[k] || 0)), 1);
         const barW = Math.min((CHART_W / allDayKeys.length) - 2, 18);
         const gap  = CHART_W / allDayKeys.length;
         pdf.setFillColor(248, 250, 252);
-        pdf.roundedRect(14, startY, CHART_W, CHART_H, 2, 2, 'F');
+        pdf.roundedRect(5, startY, CHART_W, CHART_H, 2, 2, 'F');
         pdf.setDrawColor(220, 225, 235); pdf.setLineWidth(0.2);
-        pdf.roundedRect(14, startY, CHART_W, CHART_H, 2, 2, 'S');
+        pdf.roundedRect(5, startY, CHART_W, CHART_H, 2, 2, 'S');
         [0.25, 0.5, 0.75].forEach(f => {
           const gy = startY + CHART_H - f * (CHART_H - 8) - 4;
           pdf.setDrawColor(220, 225, 235); pdf.setLineWidth(0.15);
@@ -747,7 +785,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         const logs       = filteredLogs;
         const completed  = logs.filter(l => l.checkOutTimestamp);
         const avgMins    = completed.length
-          ? Math.round(completed.reduce((s, l) => s + differenceInMinutes(parseISO(l.checkOutTimestamp!), parseISO(l.checkInTimestamp)), 0) / completed.length)
+          ? Math.round(completed.reduce((s, l) => s + differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), safeParseISO(l.checkInTimestamp) ?? new Date()), 0) / completed.length)
           : null;
         const avgDur     = avgMins !== null ? (avgMins >= 60 ? `${Math.floor(avgMins/60)}h ${avgMins%60}m` : `${avgMins}m`) : 'N/A';
         const purp: Record<string, number> = {};
@@ -776,7 +814,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         let y = drawTOC(['Executive Summary', 'Academic Attendance Trend', 'Session Archive'], 62);
 
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...NAVY);
-        pdf.text('1.  Executive Summary', 14, y); y += 7;
+        pdf.text('1.  Executive Summary', 5, y); y += 7;
 
         const showTopDept    = deptFilter === 'All Departments';
         const showTopProgram = programFilter === 'All Programs';
@@ -822,7 +860,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         }
 
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...NAVY);
-        pdf.text('2.  Academic Attendance Trend', 14, y); y += 7;
+        pdf.text('2.  Academic Attendance Trend', 5, y); y += 7;
         y = drawBarChart(days, y, GRN, [62, 92, 155], 'Peak Day', 'Standard Day');
 
         pdf.addPage();
@@ -834,12 +872,12 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
           startY: 16,
           head: [['Student', 'ID', 'Dept', 'Program', 'Purpose', 'Time In', 'Time Out', 'Duration', 'Status']],
           body: logs.map(l => {
-            const ci = parseISO(l.checkInTimestamp);
+            const ci = safeParseISO(l.checkInTimestamp) ?? new Date();
             const isAct = !l.checkOutTimestamp && isToday(ci);
             const isNT  = !l.checkOutTimestamp && !isToday(ci);
             const status = l.checkOutTimestamp ? 'Done' : isAct ? 'Active' : 'No Tap';
-            const dur = l.checkOutTimestamp ? (() => { const m = differenceInMinutes(parseISO(l.checkOutTimestamp), ci); return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; })() : '-';
-            return [l.studentName||'-', l.studentId||'-', l.deptID||'-', (l as LogRecord).program || userProgramMap[l.studentId] || '-', l.purpose||'-', format(ci,'MMM d, h:mm a'), l.checkOutTimestamp ? format(parseISO(l.checkOutTimestamp),'h:mm a') : '-', dur, status];
+            const dur = l.checkOutTimestamp ? (() => { const m = differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), ci); return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; })() : '-';
+            return [l.studentName||'-', l.studentId||'-', l.deptID||'-', (l as LogRecord).program || userProgramMap[l.studentId] || '-', l.purpose||'-', format(ci,'MMM d, h:mm a'), l.checkOutTimestamp ? (safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—') : '-', dur, status];
           }),
           headStyles:         { fillColor: NAVY, textColor: 255, fontStyle: 'bold', fontSize: 9.5 },
           bodyStyles:         { fontSize: 9 },
@@ -859,7 +897,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
           },
           styles: { cellPadding: { top: 3, bottom: 3, left: 2.5, right: 2.5 }, overflow: 'linebreak' },
           tableWidth: 182,
-          margin: { left: 14, right: 14 },
+          margin: { left: 5, right: 5 },
           didParseCell(data) {
             if (data.section !== 'body') return;
             const row = logs[data.row.index]; if (!row) return;
@@ -909,7 +947,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         let y = drawTOC(['Executive Summary', 'Unauthorized Access Trends', 'Violation Log'], 62);
 
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...RED_MED);
-        pdf.text('1.  Executive Summary', 14, y); y += 7;
+        pdf.text('1.  Executive Summary', 5, y); y += 7;
 
         const cards = [
           { label: 'Total Denied Attempts', value: String(totalDenied),  sub: 'blocked entry attempts in period', accent: RED_MED },
@@ -920,9 +958,9 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         y = drawCards(cards as any, y);
 
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...RED_MED);
-        pdf.text('2.  Unauthorized Access Trends', 14, y); y += 7;
+        pdf.text('2.  Unauthorized Access Trends', 5, y); y += 7;
         pdf.setFontSize(8); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...SLATE);
-        pdf.text('When are blocked users attempting entry? Staff schedules should align with peak windows.', 14, y); y += 6;
+        pdf.text('When are blocked users attempting entry? Staff schedules should align with peak windows.', 5, y); y += 6;
         y = drawBarChart(deniedDays, y, RED_MED, [220, 150, 150], 'Peak Window', 'Standard Window');
 
         pdf.addPage();
@@ -955,7 +993,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
             5: { cellWidth: 24, halign: 'center', fontStyle: 'bold' }, // Status
           },
           styles: { cellPadding: { top: 3, bottom: 3, left: 2.5, right: 2.5 }, overflow: 'linebreak' },
-          tableWidth: 182, margin: { left: 14, right: 14 },
+          tableWidth: 200, margin: { left: 5, right: 5 },
           didParseCell(data) {
             if (data.section !== 'body') return;
             // Pastel pink on all rows — professional, not eye-wrenching
@@ -1005,7 +1043,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         let y = drawTOC(['Executive Summary', 'Total Library Traffic Volume', 'Unified Session Archive'], 62);
 
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...NAVY);
-        pdf.text('1.  Executive Summary', 14, y); y += 7;
+        pdf.text('1.  Executive Summary', 5, y); y += 7;
 
         // Date range intelligence
         const isSingleDayAll = startDate === endDate;
@@ -1037,7 +1075,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         const topPurpAll = Object.entries(purpAll).sort((a,b) => b[1]-a[1])[0]?.[0] || '-';
         const completedAll = logs.filter(l => l.checkOutTimestamp);
         const avgMinsAll = completedAll.length
-          ? Math.round(completedAll.reduce((s,l) => s + differenceInMinutes(parseISO(l.checkOutTimestamp!), parseISO(l.checkInTimestamp)), 0) / completedAll.length)
+          ? Math.round(completedAll.reduce((s,l) => s + differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), safeParseISO(l.checkInTimestamp) ?? new Date()), 0) / completedAll.length)
           : null;
         const avgDurAll = avgMinsAll !== null ? (avgMinsAll >= 60 ? `${Math.floor(avgMinsAll/60)}h ${avgMinsAll%60}m` : `${avgMinsAll}m`) : 'N/A';
         const activeCountAll = logs.filter(l => !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp))).length;
@@ -1057,7 +1095,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         y = drawCards(cards as any, y);
 
         pdf.setFontSize(11); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...NAVY);
-        pdf.text('2.  Total Library Traffic Volume', 14, y); y += 7;
+        pdf.text('2.  Total Library Traffic Volume', 5, y); y += 7;
         pdf.setFontSize(8); pdf.setFont('helvetica', 'normal'); pdf.setTextColor(...SLATE);
         pdf.text('Stacked view: blue = successful entries, red = denied attempts.', 14, y); y += 6;
         y = drawStackedBarChart(days, deniedByDay, y);
@@ -1074,13 +1112,13 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                         purpose: string; timeIn: string; timeOut: string; dur: string; status: string; };
         const allRowsSorted: AllRow[] = [
           ...logs.map(l => {
-            const ci = parseISO(l.checkInTimestamp);
+            const ci = safeParseISO(l.checkInTimestamp) ?? new Date();
             const isAct = !l.checkOutTimestamp && isToday(ci);
             const status = l.checkOutTimestamp ? 'Done' : isAct ? 'Active' : 'No Tap';
-            const dur = l.checkOutTimestamp ? (() => { const m = differenceInMinutes(parseISO(l.checkOutTimestamp), ci); return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; })() : '-';
+            const dur = l.checkOutTimestamp ? (() => { const m = differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), ci); return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; })() : '-';
             return { isBlocked: false, name: l.studentName||'-', id: l.studentId||'-', dept: l.deptID||'-',
               prog: (l as LogRecord).program||userProgramMap[l.studentId]||'-', purpose: l.purpose||'-',
-              timeIn: format(ci,'MMM d, h:mm a'), timeOut: l.checkOutTimestamp?format(parseISO(l.checkOutTimestamp),'h:mm a'):'-',
+              timeIn: format(ci,'MMM d, h:mm a'), timeOut: l.checkOutTimestamp?(safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—'):'-',
               dur, status, _ts: l.checkInTimestamp };
           }),
           ...attempts.map(a => ({
@@ -1112,7 +1150,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
             8: { cellWidth: 16, halign: 'center', fontStyle: 'bold' }, // Status
           },
           styles: { cellPadding: { top: 3, bottom: 3, left: 2.5, right: 2.5 }, overflow: 'linebreak' },
-          tableWidth: 182, margin: { left: 14, right: 14 },
+          tableWidth: 200, margin: { left: 5, right: 5 },
           didParseCell(data) {
             if (data.section !== 'body') return;
             const row = allRowsSorted[data.row.index];
@@ -1166,10 +1204,10 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
     if (!filteredLogs.length) return;
     const headers = ['Student Name', 'Student ID', 'Department', 'Purpose', 'Check In', 'Check Out', 'Duration (mins)', 'Status'];
     const rows = filteredLogs.map(l => {
-      const ci = parseISO(l.checkInTimestamp);
+      const ci = safeParseISO(l.checkInTimestamp) ?? new Date();
       const isNoTap = !l.checkOutTimestamp && !isToday(ci);
       const mins = l.checkOutTimestamp
-        ? differenceInMinutes(parseISO(l.checkOutTimestamp), ci)
+        ? differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), ci)
         : null;
       return [
         l.studentName || 'Student',
@@ -1177,7 +1215,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
         l.deptID,
         l.purpose,
         format(ci, 'yyyy-MM-dd HH:mm:ss'),
-        l.checkOutTimestamp ? format(parseISO(l.checkOutTimestamp), 'yyyy-MM-dd HH:mm:ss') : '',
+        l.checkOutTimestamp ? (safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'yyyy-MM-dd HH:mm:ss') : '—') : '',
         mins !== null ? String(mins) : '',
         l.checkOutTimestamp ? 'Completed' : isNoTap ? 'No Tap' : 'Active',
       ];
@@ -1460,6 +1498,26 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                   </div>
                 </div>
               )}
+
+              {/* ROLE FILTER */}
+              {userStatusFilter !== 'blocked' && (
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-slate-400 px-1">Role</span>
+                  <div className="flex items-center gap-0.5 p-1 rounded-xl bg-slate-100">
+                    {([
+                      { value: 'all'     as const, label: 'ALL'     },
+                      { value: 'student' as const, label: 'STUDENT' },
+                      { value: 'staff'   as const, label: 'STAFF'   },
+                    ]).map(opt => (
+                      <button key={opt.value} onClick={() => { setRoleFilter(opt.value); resetPage?.(); }}
+                        className="px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all tracking-wide"
+                        style={roleFilter === opt.value ? { background: navy, color: 'white' } : { color: '#64748b' }}>
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Records count + Reset */}
@@ -1732,9 +1790,11 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                           {/* Student */}
                           <TableCell className="pl-5">
                             <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0 bg-red-400">
-                                {(a.studentName||'?')[0].toUpperCase()}
-                              </div>
+                              <StudentAvatar
+                                name={a.studentName || '?'}
+                                avatarUrl={(a as any).avatarUrl}
+                                fallbackBg="#f87171"
+                              />
                               <span className="font-semibold text-red-800 text-sm">{a.studentName||'—'}</span>
                             </div>
                           </TableCell>
@@ -1776,9 +1836,11 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                         style={{ background: 'rgba(255,241,241,0.7)', height: '60px' }}>
                         <TableCell className="pl-5">
                           <div className="flex items-center gap-2.5">
-                            <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0 bg-red-400">
-                              {(a.studentName||'?')[0].toUpperCase()}
-                            </div>
+                            <StudentAvatar
+                              name={a.studentName || '?'}
+                              avatarUrl={(a as any).avatarUrl}
+                              fallbackBg="#f87171"
+                            />
                             <span className="font-semibold text-slate-800 text-sm">{a.studentName||'—'}</span>
                           </div>
                         </TableCell>
@@ -1820,10 +1882,10 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                     <TableRow key={l.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors" style={{ height: '60px' }}>
                       <TableCell className="pl-5">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0"
-                            style={{ background: `linear-gradient(135deg,${navy},hsl(221,60%,35%))` }}>
-                            {(l.studentName||'S').split(',')[0]?.trim()[0]||'S'}
-                          </div>
+                          <StudentAvatar
+                            name={l.studentName || 'S'}
+                            avatarUrl={(l as any).avatarUrl}
+                          />
                           <span className="font-semibold text-slate-900 text-sm">{l.studentName||'Student'}</span>
                         </div>
                       </TableCell>
@@ -1857,7 +1919,7 @@ export function ReportModule({ isSuperAdmin }: ReportModuleProps) {
                       <TableCell className="hidden md:table-cell">
                         <span className="text-sm font-medium"
                           style={{ color: l.checkOutTimestamp ? '#475569' : noTap ? '#ef4444' : '#3b82f6' }}>
-                          {l.checkOutTimestamp ? format(parseISO(l.checkOutTimestamp),'h:mm a') : noTap ? 'NO TAP' : 'ACTIVE'}
+                          {l.checkOutTimestamp ? (safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—') : noTap ? 'NO TAP' : 'ACTIVE'}
                         </span>
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-center">

@@ -1,5 +1,7 @@
 "use client";
 
+import { StudentAvatar } from '@/components/ui/StudentAvatar';
+
 import { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -29,6 +31,7 @@ function initials(u: UserRecord) {
 }
 
 const navy = 'hsl(221,72%,22%)';
+const thCls = 'text-[10px] font-extrabold uppercase tracking-widest text-slate-400 bg-slate-50 px-4 py-3 cursor-pointer select-none hover:bg-slate-100 transition-colors whitespace-nowrap text-left';
 
 export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean }) {
   const [newFirstName,  setNewFirstName]  = useState('');
@@ -188,13 +191,13 @@ export function AdminAccessManagement({ isSuperAdmin }: { isSuperAdmin: boolean 
                         {/* Name */}
                         <TableCell className="pl-5">
                           <div className="flex items-center gap-3">
-                            <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs flex-shrink-0"
-                              style={{
-                                background: admin.role === 'super_admin' ? `${navy}12` : 'rgba(100,116,139,0.1)',
-                                color: admin.role === 'super_admin' ? navy : '#64748b',
-                              }}>
-                              {initials(admin)}
-                            </div>
+                            <StudentAvatar
+                              name={`${admin.firstName || ''} ${admin.lastName || ''}`}
+                              avatarUrl={(admin as any).avatarUrl}
+                              size={36}
+                              radius="12px"
+                              fallbackBg={admin.role === 'super_admin' ? `linear-gradient(135deg,${navy},hsl(221,60%,35%))` : 'linear-gradient(135deg,#64748b,#475569)'}
+                            />
                             <div>
                               <p className="font-bold text-slate-900 text-sm">{fullName(admin)}</p>
                               {admin.program && (

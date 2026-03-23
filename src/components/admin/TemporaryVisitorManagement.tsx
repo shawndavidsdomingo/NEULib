@@ -1,5 +1,7 @@
 "use client";
 
+import { StudentAvatar } from '@/components/ui/StudentAvatar';
+
 import { useState, useMemo } from 'react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Input } from '@/components/ui/input';
@@ -17,6 +19,7 @@ import { SuccessCard } from '@/components/ui/SuccessCard';
 interface Props { isSuperAdmin?: boolean | null; }
 
 const navy = 'hsl(221,72%,22%)';
+const thCls = 'text-[10px] font-extrabold uppercase tracking-widest text-slate-400 bg-slate-50 px-4 py-3 cursor-pointer select-none hover:bg-slate-100 transition-colors whitespace-nowrap text-left';
 
 export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
   const [search, setSearch] = useState('');
@@ -253,7 +256,7 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
     setIsDeleteOpen(false);
   };
 
-  const thStyle = "text-xs font-bold uppercase tracking-wide text-slate-500 bg-slate-50/80 py-3";
+  const thStyle = "text-[10px] font-extrabold uppercase tracking-widest text-slate-400 bg-slate-50 py-3";
 
   return (
     <>
@@ -389,10 +392,13 @@ export function TemporaryVisitorManagement({ isSuperAdmin }: Props) {
                       {/* Name */}
                       <TableCell className="pl-5">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
-                            style={{ background: 'linear-gradient(135deg,hsl(43,85%,50%),hsl(38,90%,40%))' }}>
-                            {(v.firstName || 'V')[0]}{(v.lastName || 'V')[0]}
-                          </div>
+                          <StudentAvatar
+                            name={`${v.firstName || ''} ${v.lastName || ''}`}
+                            avatarUrl={(v as any).avatarUrl}
+                            size={40}
+                            radius="12px"
+                            fallbackBg="linear-gradient(135deg,hsl(43,85%,50%),hsl(38,90%,40%))"
+                          />
                           <div>
                             <p className="font-bold text-slate-900 text-sm">
                               {(v.lastName || '').toUpperCase()}, {v.firstName}

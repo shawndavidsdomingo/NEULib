@@ -14,10 +14,14 @@ import { AuditLogTab } from './AuditLogTab';
 import { LogHistory } from './LogHistory';
 import { PurposeManagement } from './PurposeManagement';
 import { CredentialRequestsTab } from './CredentialRequestsTab';
+import { ReportScheduler } from './ReportScheduler';
+import { KioskAnnouncements } from './KioskAnnouncements';
+import { BranchManagement } from './BranchManagement';
 import {
   Users, LayoutDashboard, FileText, LogOut, ShieldCheck,
   Clock, Building2, MapPin, Scan, Menu, X as XIcon,
   ClipboardList, History, BookOpen, Shield, LucideIcon,
+  CalendarClock, Megaphone, GitBranch,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { UserRecord } from '@/lib/firebase-schema';
@@ -25,12 +29,20 @@ import { User } from 'firebase/auth';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { useToast } from '@/hooks/use-toast';
 import { collection, query, where, orderBy, limit } from 'firebase/firestore';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
-// Explicit type for nav items — avoids literal tuple conflicts from `as const`
+// ── Branch types (inline — avoids circular import) ──────────────────────────
+interface BranchRecord {
+  id: string; name: string; isDefault: boolean; address?: string; capacity?: number;
+}
+
 interface NavItem {
   id: string;
   label: string;
   icon: LucideIcon;
+  superAdminOnly?: boolean;
 }
 
 interface NavGroup {
@@ -38,7 +50,6 @@ interface NavGroup {
   items: NavItem[];
 }
 
-// Defined outside component so TypeScript doesn't re-narrow inside JSX
 const NAV_GROUPS: NavGroup[] = [
   {
     title: '🏠 General',
@@ -70,8 +81,16 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: '📑 Reporting & Auditing',
     items: [
-      { id: 'reports',  label: 'Reports',   icon: FileText },
-      { id: 'auditlog', label: 'Audit Log', icon: Shield },
+      { id: 'reports',   label: 'Reports',          icon: FileText },
+      { id: 'schedules', label: 'Report Schedules', icon: CalendarClock },
+      { id: 'auditlog',  label: 'Audit Log',        icon: Shield, superAdminOnly: true },
+    ],
+  },
+  {
+    title: '⚙ Library Management',
+    items: [
+      { id: 'announcements', label: 'Announcements',  icon: Megaphone },  // all admins
+      { id: 'branches',      label: 'Branches',       icon: GitBranch, superAdminOnly: true },
     ],
   },
 ];
@@ -79,6 +98,7 @@ const NAV_GROUPS: NavGroup[] = [
 const ALL_NAV_ITEMS: NavItem[] = NAV_GROUPS.flatMap(g => g.items);
 
 interface UnifiedAdminDashboardProps {
+  suppressBranchPicker?: boolean;
   onSwitchToStudent?: () => void;
   onExit?: () => void;
   adminData?: UserRecord | null;
@@ -90,46 +110,80 @@ const navy     = 'hsl(221,72%,22%)';
 const navyGrad = 'linear-gradient(135deg,hsl(221,72%,18%),hsl(221,72%,24%))';
 
 export default function UnifiedAdminDashboard({
-  onExit, adminData, user, isSuperAdmin, onSwitchToStudent,
+  onExit, adminData, user, isSuperAdmin, onSwitchToStudent, suppressBranchPicker,
 }: UnifiedAdminDashboardProps) {
   const [activeTab,     setActiveTab]     = useState('overview');
   const [showKioskInfo, setShowKioskInfo] = useState(false);
   const [confirmSwitch, setConfirmSwitch] = useState(false);
   const [menuOpen,      setMenuOpen]      = useState(false);
 
+  // ── Branch selector state ─────────────────────────────────────────────────
+  const [activeBranchId,  setActiveBranchId]  = useState<string | null>(null);
+  const [branchSelected,  setBranchSelected]  = useState(false); // has the admin picked a branch this session?
+
   const db = useFirestore();
 
-  // Pending visitors badge
+  // Pending visitors badge — admin only
   const pendingQuery = useMemoFirebase(
-    () => query(collection(db, 'users'), where('status', '==', 'pending')),
-    [db]
+    () => isSuperAdmin ? query(collection(db, 'users'), where('status', '==', 'pending')) : null,
+    [db, isSuperAdmin]
   );
   const { data: pendingUsers } = useCollection<UserRecord>(pendingQuery);
   const pendingCount = pendingUsers?.length || 0;
 
-  // Credential requests badge
+  // Credential requests badge — admin only
   const credReqRef = useMemoFirebase(
-    () => query(collection(db, 'credential_requests'), where('status', 'in', ['pending', 'pending_verification'])),
-    [db]
+    () => isSuperAdmin
+      ? query(collection(db, 'credential_requests'), where('status', 'in', ['pending', 'pending_verification']))
+      : null,
+    [db, isSuperAdmin]
   );
   const { data: pendingReqs } = useCollection<any>(credReqRef);
   const credReqCount = pendingReqs?.length || 0;
 
-  // ── Real-time blocked attempt alert ─────────────────────────────────────
+  // Live presence badge — open sessions (library_logs is readable by all signed-in)
+  const openSessionsRef = useMemoFirebase(
+    () => query(collection(db, 'library_logs'), where('checkOutTimestamp', '==', null)),
+    [db]
+  );
+  const { data: openSessions } = useCollection<any>(openSessionsRef);
+  const liveCount = openSessions?.length ?? 0;
+
+  // Branches — readable by all signed-in users
+  const branchesRef = useMemoFirebase(() => collection(db, 'branches'), [db]);
+  const { data: branches } = useCollection<BranchRecord>(branchesRef);
+
+  // Once branches load, show picker if not yet selected this session
+  useEffect(() => {
+    if (branches && branches.length > 0 && !branchSelected) {
+      // Will trigger the modal — handled in JSX
+    }
+  }, [branches, branchSelected]);
+
+  // ── Real-time blocked attempt alert ──────────────────────────────────────
   const { toast } = useToast();
+  // Only subscribe to blocked_attempts for admin users
+  // Guard: only admins should subscribe to sensitive collections
+  const isAdminUser = isSuperAdmin || adminData?.role === 'admin' || adminData?.role === 'super_admin';
   const blockedAttemptsRef = useMemoFirebase(
     () => query(collection(db, 'blocked_attempts'), orderBy('timestamp', 'desc'), limit(5)),
     [db]
   );
-  const { data: recentBlockedAttempts } = useCollection<any>(blockedAttemptsRef);
+  const { data: recentBlockedAttempts } = useCollection<any>(isAdminUser ? blockedAttemptsRef : null);
   const seenIdsRef = useRef<Set<string>>(new Set());
+  const mainRef    = useRef<HTMLElement>(null);   // scroll content to top on tab change
+  const navRef     = useRef<HTMLElement>(null);   // preserve sidebar scroll position
+
+  // Scroll content area to top when tab changes (without remounting)
+  useEffect(() => {
+    mainRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+  }, [activeTab]);
 
   useEffect(() => {
     if (!recentBlockedAttempts?.length) return;
     recentBlockedAttempts.forEach(attempt => {
       if (!attempt.id || seenIdsRef.current.has(attempt.id)) return;
       seenIdsRef.current.add(attempt.id);
-      // Only alert for attempts in the last 30 seconds (live tap-ins, not historical)
       const ageSeconds = (Date.now() - new Date(attempt.timestamp).getTime()) / 1000;
       if (ageSeconds > 30) return;
       toast({
@@ -149,18 +203,26 @@ export default function UnifiedAdminDashboard({
     : roleLabel;
   const initials  = displayName.split(' ').map((n: string) => n[0]).slice(0, 2).join('').toUpperCase();
 
-  // ── UNIFIED nav — both Admin and Super Admin see ALL tabs ─────────────────
-  const navGroups = NAV_GROUPS;
-  const allNavItems = ALL_NAV_ITEMS;
+  // Filter nav groups — hide superAdminOnly items for non-super-admins
+  const navGroups = NAV_GROUPS.map(g => ({
+    ...g,
+    items: g.items.filter(item => !item.superAdminOnly || isSuperAdmin),
+  })).filter(g => g.items.length > 0);
+
+  const allNavItems = ALL_NAV_ITEMS.filter(item => !item.superAdminOnly || isSuperAdmin);
+
+  const currentBranchName = activeBranchId
+    ? branches?.find(b => b.id === activeBranchId)?.name ?? 'Branch'
+    : 'All Branches';
 
   const renderContent = () => {
     switch (activeTab) {
       case 'overview':
         return (
           <div className="space-y-4 sm:space-y-6">
-            <OverviewDashboard />
+            <OverviewDashboard branchId={activeBranchId} />
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 items-start">
-              <div className="lg:col-span-2"><LiveFeed /></div>
+              <div className="lg:col-span-2"><LiveFeed branchId={activeBranchId} /></div>
               <div className="lg:col-span-1 flex flex-col gap-4">
                 <Card className="school-card overflow-visible">
                   <CardHeader className="px-4 py-3 border-b border-slate-100">
@@ -199,23 +261,26 @@ export default function UnifiedAdminDashboard({
             </div>
           </div>
         );
-      case 'presence':     return <CurrentVisitors />;
-      case 'history':      return <LogHistory />;
+      case 'presence':     return <CurrentVisitors branchId={activeBranchId} />;
+      case 'history':      return <LogHistory branchId={activeBranchId} />;
       case 'users':        return <UserManagement isSuperAdmin={isSuperAdmin} />;
       case 'temp':         return <TemporaryVisitorManagement isSuperAdmin={isSuperAdmin} />;
-      case 'reports':      return <ReportModule isSuperAdmin={isSuperAdmin} />;
+      case 'reports':      return <ReportModule isSuperAdmin={isSuperAdmin} branchId={activeBranchId} />;
+      case 'schedules':    return <ReportScheduler isSuperAdmin={true} />;
       case 'purposes':     return <PurposeManagement />;
       case 'requests':     return <CredentialRequestsTab />;
       case 'access':       return <AdminAccessManagement isSuperAdmin={isSuperAdmin} />;
       case 'departments':  return <DepartmentManagement />;
       case 'auditlog':     return <AuditLogTab />;
+      case 'announcements':return <KioskAnnouncements isSuperAdmin={true} />;
+      case 'branches':     return isSuperAdmin ? <BranchManagement /> : null;
       default: return null;
     }
   };
 
   // ── Shared sidebar nav renderer ───────────────────────────────────────────
-  const NavItems = ({ onItemClick }: { onItemClick?: () => void }) => (
-    <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-4"
+  const renderNav = (onItemClick?: () => void) => (
+    <nav ref={navRef} className="flex-1 px-3 py-3 overflow-y-auto space-y-4"
       style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.2) transparent' }}>
       {navGroups.map(group => (
         <div key={group.title}>
@@ -247,12 +312,21 @@ export default function UnifiedAdminDashboard({
                 }}>
                 <item.icon size={17} />
                 <span className="flex-1">{item.label}</span>
+                {/* Live presence badge — green */}
+                {item.id === 'presence' && liveCount > 0 && (
+                  <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold"
+                    style={{ background: 'hsl(142,70%,40%)', color: 'white' }}>
+                    {liveCount}
+                  </span>
+                )}
+                {/* Pending visitors badge */}
                 {item.id === 'temp' && pendingCount > 0 && (
                   <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold"
                     style={{ background: 'hsl(43,85%,55%)', color: 'hsl(221,72%,15%)' }}>
                     {pendingCount}
                   </span>
                 )}
+                {/* Credential requests badge */}
                 {item.id === 'requests' && credReqCount > 0 && (
                   <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold"
                     style={{ background: '#ef4444', color: 'white' }}>
@@ -270,6 +344,18 @@ export default function UnifiedAdminDashboard({
   // ── Bottom actions ────────────────────────────────────────────────────────
   const BottomActions = ({ onItemClick }: { onItemClick?: () => void }) => (
     <div className="p-4 border-t border-white/10 space-y-2">
+      {/* Switch branch */}
+      {branches && branches.length > 0 && (
+        <button onClick={() => { onItemClick?.(); setBranchSelected(false); }}
+          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all text-left"
+          style={{ color: 'rgba(255,255,255,0.45)' }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.75)'; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.45)'; }}>
+          <GitBranch size={15} />
+          <span className="flex-1 truncate">{activeBranchId ? (branches.find(b => b.id === activeBranchId)?.name ?? 'Branch') : 'All Branches'}</span>
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)' }}>Switch</span>
+        </button>
+      )}
       {onSwitchToStudent && (
         <button onClick={() => { onItemClick?.(); setConfirmSwitch(true); }}
           className="w-full flex items-center justify-center gap-1.5 h-9 px-3 rounded-xl text-sm font-bold transition-all active:scale-95"
@@ -321,7 +407,7 @@ export default function UnifiedAdminDashboard({
           </div>
         </div>
 
-        <NavItems />
+        {renderNav()}
         <BottomActions />
       </aside>
 
@@ -329,7 +415,7 @@ export default function UnifiedAdminDashboard({
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* Top bar */}
-        <div className="sticky top-0 z-40 px-4 sm:px-6 py-3 flex items-center justify-between border-b"
+        <div className="sticky top-0 z-40 px-4 sm:px-6 py-3 flex items-center justify-between border-b gap-3"
           style={{ background: 'rgba(255,255,255,0.94)', backdropFilter: 'blur(20px)', borderColor: 'rgba(10,26,77,0.08)' }}>
           <div className="flex items-center gap-3">
             <button onClick={() => setMenuOpen(true)}
@@ -342,10 +428,45 @@ export default function UnifiedAdminDashboard({
               <h1 className="text-xl sm:text-3xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
                 {allNavItems.find(n => n.id === activeTab)?.label || 'Overview'}
               </h1>
-              <p className="text-slate-400 text-sm font-medium mt-0.5 hidden sm:block">{dept}</p>
+              <p className="text-slate-400 text-sm font-medium mt-0.5 hidden sm:block">
+                {dept}
+                {branches && branches.length > 0 && (
+                  <span className="ml-2 text-xs font-bold px-2 py-0.5 rounded-full"
+                    style={{ background: 'rgba(10,26,77,0.08)', color: 'hsl(221,72%,22%)' }}>
+                    {activeBranchId ? (branches.find(b => b.id === activeBranchId)?.name ?? 'Branch') : '🌐 All Branches'}
+                  </span>
+                )}
+              </p>
             </div>
           </div>
-          <LiveClock variant="dark" className="hidden sm:flex" />
+
+          {/* Branch selector in top bar (only if branches exist) */}
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {(branches?.length ?? 0) > 0 && (
+              <div className="hidden sm:flex items-center gap-1.5">
+                <GitBranch size={13} style={{ color: navy }} />
+                <Select
+                  value={activeBranchId ?? 'all'}
+                  onValueChange={v => { setActiveBranchId(v === 'all' ? null : v); setBranchSelected(true); }}>
+                  <SelectTrigger className="h-8 min-w-[130px] bg-white rounded-xl border-slate-200 text-xs font-bold"
+                    style={{ color: navy }}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl">
+                    {(branches?.length ?? 0) > 1 && (
+                      <SelectItem value="all" className="text-xs font-semibold">All Branches</SelectItem>
+                    )}
+                    {(branches ?? []).map(b => (
+                      <SelectItem key={b.id} value={b.id} className="text-xs font-semibold">
+                        {b.name}{b.isDefault ? ' ★' : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            <LiveClock variant="dark" className="hidden sm:flex" />
+          </div>
         </div>
 
         {/* ── MOBILE DRAWER ── */}
@@ -372,16 +493,16 @@ export default function UnifiedAdminDashboard({
                   <XIcon size={18} />
                 </button>
               </div>
-              <NavItems onItemClick={() => setMenuOpen(false)} />
+              {renderNav(() => setMenuOpen(false))}
               <BottomActions onItemClick={() => setMenuOpen(false)} />
             </div>
           </>
         )}
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 lg:pb-6 space-y-4 sm:space-y-5"
+        <main ref={mainRef} className="flex-1 overflow-y-auto p-4 sm:p-6 pb-24 lg:pb-6 space-y-4 sm:space-y-5"
           style={{ scrollbarWidth: 'thin', scrollbarColor: 'hsl(221,72%,70%) transparent' }}>
-          <div key={activeTab} className="animate-in fade-in duration-200">
+          <div className="animate-in fade-in duration-200">
             {renderContent()}
           </div>
         </main>
@@ -427,29 +548,28 @@ export default function UnifiedAdminDashboard({
                 <Users size={20} />
               </div>
               <div>
-                <h3 className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>Switch to Student View?</h3>
-                <p className="text-slate-400 text-sm">You will be redirected to the Student Dashboard.</p>
+                <h3 className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>Go to Student Kiosk?</h3>
+                <p className="text-slate-400 text-sm">You will be signed out of admin and redirected.</p>
               </div>
             </div>
             <p className="text-slate-600 text-sm leading-relaxed">
-              Your admin session is preserved — switch back anytime using the <strong>Admin | Student</strong> toggle.
+              You will need to <strong>sign in again</strong> with your institutional account at the kiosk to check in as a student.
             </p>
             <div className="flex gap-3 pt-1">
               <button onClick={() => setConfirmSwitch(false)}
                 className="flex-1 h-11 rounded-xl font-semibold text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all">
                 Stay in Admin
               </button>
-              <button onClick={() => { setConfirmSwitch(false); onSwitchToStudent?.(); }}
+              <button onClick={() => { setConfirmSwitch(false); onExit?.(); }}
                 className="flex-1 h-11 rounded-xl font-bold text-sm text-white flex items-center justify-center gap-2 transition-all"
                 style={{ background: navy }}>
-                Switch to Student
+                Go to Kiosk
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Drawer animation keyframes */}
       <style>{`
         @keyframes drawerIn {
           from { transform: translateX(-100%); opacity: 0.6; }
@@ -459,16 +579,94 @@ export default function UnifiedAdminDashboard({
           from { opacity: 0; }
           to   { opacity: 1; }
         }
+        @keyframes branchIn {
+          from { opacity: 0; transform: scale(0.95) translateY(8px); }
+          to   { opacity: 1; transform: scale(1)    translateY(0);   }
+        }
       `}</style>
+
+      {/* ══ BRANCH PICKER MODAL ══ */}
+      {branches && branches.length > 0 && !branchSelected && !suppressBranchPicker && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+          style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(10px)' }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden"
+            style={{ animation: 'branchIn 0.35s cubic-bezier(0.32,0.72,0,1)' }}>
+
+            {/* Header */}
+            <div className="px-7 pt-7 pb-5 text-center"
+              style={{ background: `linear-gradient(160deg,hsl(225,70%,42%),${navy})` }}>
+              <div className="w-12 h-12 rounded-2xl mx-auto mb-3 flex items-center justify-center"
+                style={{ background: 'rgba(255,255,255,0.15)' }}>
+                <GitBranch size={22} className="text-white" />
+              </div>
+              <h3 className="text-xl font-bold text-white" style={{ fontFamily: "'Playfair Display',serif" }}>
+                Select Branch
+              </h3>
+              <p className="text-white/60 text-sm font-medium mt-1">
+                Choose which library branch to monitor
+              </p>
+            </div>
+
+            {/* Branch options */}
+            <div className="p-5 space-y-2.5">
+              {/* All Branches option */}
+              {branches.length > 1 && (
+                <button
+                  onClick={() => { setActiveBranchId(null); setBranchSelected(true); }}
+                  className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 text-left transition-all active:scale-[0.98] hover:border-blue-200 hover:bg-blue-50/40"
+                  style={{ borderColor: '#e2e8f0', background: '#fafafa' }}>
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'rgba(10,26,77,0.07)' }}>
+                    <GitBranch size={18} style={{ color: navy }} />
+                  </div>
+                  <div>
+                    <p className="font-bold text-slate-900 text-sm">All Branches</p>
+                    <p className="text-xs text-slate-400 font-medium mt-0.5">View data across all locations</p>
+                  </div>
+                </button>
+              )}
+
+              {/* Individual branches */}
+              {branches.map(b => (
+                <button key={b.id}
+                  onClick={() => { setActiveBranchId(b.id); setBranchSelected(true); }}
+                  className="w-full flex items-center gap-3 p-4 rounded-2xl border-2 text-left transition-all active:scale-[0.98]"
+                  style={{ borderColor: b.isDefault ? `${navy}30` : '#e2e8f0', background: b.isDefault ? `${navy}05` : '#fafafa' }}
+                  onMouseEnter={e => {
+                    (e.currentTarget as HTMLElement).style.borderColor = navy + '40';
+                    (e.currentTarget as HTMLElement).style.background = `${navy}08`;
+                  }}
+                  onMouseLeave={e => {
+                    (e.currentTarget as HTMLElement).style.borderColor = b.isDefault ? `${navy}30` : '#e2e8f0';
+                    (e.currentTarget as HTMLElement).style.background = b.isDefault ? `${navy}05` : '#fafafa';
+                  }}>
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-white font-bold text-sm"
+                    style={{ background: `linear-gradient(135deg,${navy},hsl(221,60%,35%))` }}>
+                    {b.name[0]?.toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-slate-900 text-sm">{b.name}</p>
+                      {b.isDefault && (
+                        <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full"
+                          style={{ background: 'hsl(43,85%,52%,0.15)', color: 'hsl(38,90%,35%)' }}>
+                          ★ Default
+                        </span>
+                      )}
+                    </div>
+                    {b.address && <p className="text-xs text-slate-400 font-medium mt-0.5 truncate">{b.address}</p>}
+                  </div>
+                </button>
+              ))}
+
+              <p className="text-center text-xs text-slate-400 pt-1 font-medium">
+                You can change this anytime from the top bar
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
-
-// In UnifiedAdminDashboard.tsx — add when needed, remove after:
-//import { ProgramBackfillTool } from './ProgramBackfillTool';
-
-// In NAV_GROUPS:
-//{ title: '⚙ System Tools', items: [{ id: 'backfill', label: 'Data Migration', icon: Wrench }] }
-
-// In renderContent:
-//case 'backfill': return isSuperAdmin ? <ProgramBackfillTool /> : null;

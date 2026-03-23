@@ -33,8 +33,8 @@ export interface AuditLogRecord {
   actorEmail:  string;
   targetId?:   string;
   targetName?: string;
-  detail?:     string;       // human-readable change description
-  timestamp:   string;       // ISO
+  detail?:     string;
+  timestamp:   string;
 }
 
 // ─── Action metadata ──────────────────────────────────────────────────────────
@@ -83,13 +83,13 @@ type SortField = 'timestamp' | 'actor' | 'action' | 'target';
 export function AuditLogTab() {
   const db = useFirestore();
 
-  const [search,       setSearch]       = useState('');
-  const [alRpp,  setAlRpp]  = useState<number>(25);
-  const [alPage, setAlPage] = useState(1);
-  const [category,     setCategory]     = useState('all');
-  const [sortField,    setSortField]    = useState<SortField>('timestamp');
-  const [sortDir,      setSortDir]      = useState<'asc' | 'desc'>('desc');
-  const [expandedLog,  setExpandedLog]  = useState<AuditLogRecord | null>(null);
+  const [search,      setSearch]      = useState('');
+  const [alRpp,       setAlRpp]       = useState<number>(25);
+  const [alPage,      setAlPage]      = useState(1);
+  const [category,    setCategory]    = useState('all');
+  const [sortField,   setSortField]   = useState<SortField>('timestamp');
+  const [sortDir,     setSortDir]     = useState<'asc' | 'desc'>('desc');
+  const [expandedLog, setExpandedLog] = useState<AuditLogRecord | null>(null);
 
   const logsQuery = useMemoFirebase(
     () => query(collection(db, 'audit_logs'), orderBy('timestamp', 'desc'), limit(500)),
@@ -99,23 +99,27 @@ export function AuditLogTab() {
 
   const filtered = useMemo(() => {
     if (!logs) return [];
-    const s = search.toLowerCase();
+    const s = search.toLowerCase().trim();
     let out = logs.filter(l => {
+      // ── Extended search: name, email, targetId, action keyword, detail ──
       const mS = !s
         || l.actorName.toLowerCase().includes(s)
         || l.actorEmail.toLowerCase().includes(s)
-        || (l.targetName || '').toLowerCase().includes(s)
-        || (l.detail || '').toLowerCase().includes(s);
+        || (l.targetName  || '').toLowerCase().includes(s)
+        || (l.targetId    || '').toLowerCase().includes(s)
+        || (l.detail      || '').toLowerCase().includes(s)
+        || l.action.toLowerCase().includes(s)
+        || (ACTION_META[l.action]?.label || '').toLowerCase().includes(s);
       const mC = category === 'all' || l.action.startsWith(category);
       return mS && mC;
     });
 
     return [...out].sort((a, b) => {
       let va = '', vb = '';
-      if      (sortField === 'timestamp') { va = a.timestamp;   vb = b.timestamp; }
-      else if (sortField === 'actor')     { va = a.actorName;   vb = b.actorName; }
-      else if (sortField === 'action')    { va = a.action;      vb = b.action; }
-      else if (sortField === 'target')    { va = a.targetName || ''; vb = b.targetName || ''; }
+      if      (sortField === 'timestamp') { va = a.timestamp;         vb = b.timestamp; }
+      else if (sortField === 'actor')     { va = a.actorName;         vb = b.actorName; }
+      else if (sortField === 'action')    { va = a.action;            vb = b.action; }
+      else if (sortField === 'target')    { va = a.targetName || '';  vb = b.targetName || ''; }
       const cmp = va < vb ? -1 : va > vb ? 1 : 0;
       return sortDir === 'asc' ? cmp : -cmp;
     });
@@ -163,14 +167,21 @@ export function AuditLogTab() {
           <div className="relative flex-1 min-w-[180px]">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <Input
-              placeholder="Search admin, target, or detail…"
+              placeholder="Search name, email, ID, action, or detail…"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setAlPage(1); }}
               className="pl-8 h-9 bg-slate-50 border-slate-200 rounded-xl text-sm font-medium"
             />
+            {search && (
+              <button
+                onClick={() => { setSearch(''); setAlPage(1); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-600">
+                <XIcon size={12} />
+              </button>
+            )}
           </div>
 
-          <Select value={category} onValueChange={setCategory}>
+          <Select value={category} onValueChange={v => { setCategory(v); setAlPage(1); }}>
             <SelectTrigger className="h-9 w-44 bg-slate-50 border-slate-200 rounded-xl font-semibold text-xs">
               <div className="flex items-center gap-1.5">
                 <Filter size={11} style={{ color: navy }} />
@@ -233,7 +244,7 @@ export function AuditLogTab() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.slice((alPage-1)*alRpp, alPage*alRpp).map(log => {
+                {filtered.slice((alPage - 1) * alRpp, alPage * alRpp).map(log => {
                   const meta = ACTION_META[log.action] ?? {
                     label: log.action, color: '#64748b', icon: ShieldAlert,
                   };
@@ -258,7 +269,7 @@ export function AuditLogTab() {
                         <div className="flex items-center gap-2">
                           <div className="w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0"
                             style={{ background: navy }}>
-                            {(log.actorName || '?').split(' ').map(n => n[0]).slice(0,2).join('').toUpperCase()}
+                            {(log.actorName || '?').split(' ').map(n => n[0]).slice(0, 2).join('').toUpperCase()}
                           </div>
                           <div>
                             <p className="font-semibold text-slate-900 text-sm whitespace-nowrap">{log.actorName}</p>
@@ -299,8 +310,7 @@ export function AuditLogTab() {
                             <button
                               onClick={() => setExpandedLog(log)}
                               title="Full view"
-                              className="flex-shrink-0 p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
-                            >
+                              className="flex-shrink-0 p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors">
                               <Maximize2 size={13} />
                             </button>
                           )}
@@ -315,8 +325,6 @@ export function AuditLogTab() {
         )}
       </div>
 
-      {/* ── Full View Modal ── */}
-
       {/* ── Pagination ── */}
       {filtered.length > 0 && (() => {
         const _tot = filtered.length;
@@ -325,33 +333,33 @@ export function AuditLogTab() {
           <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-xs font-medium text-slate-400">
-                {(alPage-1)*alRpp+1}–{Math.min(alPage*alRpp,_tot)} of {_tot}
+                {(alPage - 1) * alRpp + 1}–{Math.min(alPage * alRpp, _tot)} of {_tot}
               </span>
               <div className="flex items-center gap-1">
                 <span className="text-xs font-semibold text-slate-400 whitespace-nowrap">Rows per page:</span>
                 <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-100">
-                  {([25,50,100] as const).map(n=>(
-                    <button key={n} onClick={()=>{ setAlRpp(n); setAlPage(1); }}
+                  {([25, 50, 100] as const).map(n => (
+                    <button key={n} onClick={() => { setAlRpp(n); setAlPage(1); }}
                       className="px-2.5 py-1 rounded-md text-xs font-bold transition-all"
-                      style={alRpp===n?{background:'hsl(43,85%,50%)',color:'white'}:{color:'#64748b'}}>{n}</button>
+                      style={alRpp === n ? { background: 'hsl(43,85%,50%)', color: 'white' } : { color: '#64748b' }}>{n}</button>
                   ))}
-                  <button onClick={()=>{const v=parseInt(prompt('Rows per page (10-500):',String(alRpp))||String(alRpp));if(!isNaN(v)&&v>=10&&v<=500){ setAlRpp(v); setAlPage(1);}}}
+                  <button onClick={() => { const v = parseInt(prompt('Rows per page (10-500):', String(alRpp)) || String(alRpp)); if (!isNaN(v) && v >= 10 && v <= 500) { setAlRpp(v); setAlPage(1); } }}
                     className="px-2.5 py-1 rounded-md text-xs font-bold text-slate-500 hover:bg-white transition-all">Custom</button>
                 </div>
               </div>
             </div>
-            {_pg>1&&(
+            {_pg > 1 && (
               <div className="flex items-center gap-1">
-                <button onClick={()=>{ setAlPage(1); window.scrollTo({top:0,behavior:'smooth'}); }} disabled={alPage===1} className="h-7 px-2 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">««</button>
-                <button onClick={()=>{ setAlPage((p:number)=>Math.max(1,p-1)); window.scrollTo({top:0,behavior:'smooth'}); }} disabled={alPage===1} className="h-7 px-2.5 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">‹</button>
-                {Array.from({length:_pg},(_,i)=>i+1)
-                  .filter(p=>p===1||p===_pg||Math.abs(p-alPage)<=1)
-                  .reduce<(number|string)[]>((acc,p,i,a)=>{if(i>0&&(p as number)-(a[i-1] as number)>1)acc.push('...');acc.push(p);return acc;},[])
-                  .map((p,i)=>p==='...'?<span key={'e'+i} className="px-1 text-slate-400 text-xs">…</span>
-                    :<button key={p} onClick={()=>{ setAlPage(p as number); window.scrollTo({top:0,behavior:'smooth'}); }} className="h-7 w-7 rounded-lg text-xs font-bold border transition-all"
-                       style={alPage===p?{background:'hsl(43,85%,50%)',color:'white',border:'none'}:{borderColor:'#e2e8f0',color:'#64748b'}}>{p}</button>)}
-                <button onClick={()=>setAlPage((p:number)=>Math.min(_pg,p+1))} disabled={alPage===_pg} className="h-7 px-2.5 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">›</button>
-                <button onClick={()=>{ setAlPage(_pg); window.scrollTo({top:0,behavior:'smooth'}); }} disabled={alPage===_pg} className="h-7 px-2 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">»»</button>
+                <button onClick={() => { setAlPage(1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} disabled={alPage === 1} className="h-7 px-2 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">««</button>
+                <button onClick={() => { setAlPage((p: number) => Math.max(1, p - 1)); window.scrollTo({ top: 0, behavior: 'smooth' }); }} disabled={alPage === 1} className="h-7 px-2.5 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">‹</button>
+                {Array.from({ length: _pg }, (_, i) => i + 1)
+                  .filter(p => p === 1 || p === _pg || Math.abs(p - alPage) <= 1)
+                  .reduce<(number | string)[]>((acc, p, i, a) => { if (i > 0 && (p as number) - (a[i - 1] as number) > 1) acc.push('...'); acc.push(p); return acc; }, [])
+                  .map((p, i) => p === '...' ? <span key={'e' + i} className="px-1 text-slate-400 text-xs">…</span>
+                    : <button key={p} onClick={() => { setAlPage(p as number); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="h-7 w-7 rounded-lg text-xs font-bold border transition-all"
+                      style={alPage === p ? { background: 'hsl(43,85%,50%)', color: 'white', border: 'none' } : { borderColor: '#e2e8f0', color: '#64748b' }}>{p}</button>)}
+                <button onClick={() => setAlPage((p: number) => Math.min(_pg, p + 1))} disabled={alPage === _pg} className="h-7 px-2.5 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">›</button>
+                <button onClick={() => { setAlPage(_pg); window.scrollTo({ top: 0, behavior: 'smooth' }); }} disabled={alPage === _pg} className="h-7 px-2 rounded-lg text-xs font-bold border border-slate-200 disabled:opacity-30 transition-all">»»</button>
               </div>
             )}
           </div>
@@ -365,16 +373,15 @@ export function AuditLogTab() {
   );
 }
 
-// ── Extracted modal so it's valid JSX (can't use IIFE with const inside JSX) ──
+// ── Full View Modal ────────────────────────────────────────────────────────────
 function AuditFullViewModal({ log, onClose }: { log: AuditLogRecord; onClose: () => void }) {
+  const navy = 'hsl(221,72%,22%)';
   const meta = ACTION_META[log.action] ?? { label: log.action, color: '#64748b', icon: ShieldAlert };
   const Icon = meta.icon;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(6px)' }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-
-        {/* Header */}
         <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between"
           style={{ background: `${navy}07` }}>
           <div className="flex items-center gap-3">
@@ -390,15 +397,12 @@ function AuditFullViewModal({ log, onClose }: { log: AuditLogRecord; onClose: ()
               </p>
             </div>
           </div>
-          <button onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-400 transition-colors">
             <XIcon size={16} />
           </button>
         </div>
 
-        {/* Body */}
         <div className="px-6 py-5 space-y-4" style={{ scrollbarWidth: 'thin', scrollbarColor: 'hsl(221,72%,70%) transparent', maxHeight: '60vh', overflowY: 'auto' }}>
-          {/* Action badge */}
           <div className="flex items-center gap-2">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20">Action</span>
             <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1.5 rounded-full"
@@ -406,8 +410,6 @@ function AuditFullViewModal({ log, onClose }: { log: AuditLogRecord; onClose: ()
               <Icon size={11} /> {meta.label}
             </span>
           </div>
-
-          {/* Actor */}
           <div className="flex items-start gap-2">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20 pt-0.5">Admin</span>
             <div>
@@ -415,38 +417,27 @@ function AuditFullViewModal({ log, onClose }: { log: AuditLogRecord; onClose: ()
               <p className="text-xs text-slate-400 font-medium">{log.actorEmail}</p>
             </div>
           </div>
-
-          {/* Target */}
           {log.targetName && (
             <div className="flex items-start gap-2">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20 pt-0.5">Target</span>
               <div>
                 <p className="text-sm font-semibold text-slate-900">{log.targetName}</p>
-                {log.targetId && (
-                  <p className="text-xs text-slate-400 font-mono">{log.targetId}</p>
-                )}
+                {log.targetId && <p className="text-xs text-slate-400 font-mono">{log.targetId}</p>}
               </div>
             </div>
           )}
-
-          {/* Full detail */}
           {log.detail && (
             <div className="flex items-start gap-2">
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20 pt-0.5">Detail</span>
-              <p className="text-sm text-slate-700 font-medium leading-relaxed flex-1 break-words">
-                {log.detail}
-              </p>
+              <p className="text-sm text-slate-700 font-medium leading-relaxed flex-1 break-words">{log.detail}</p>
             </div>
           )}
-
-          {/* Timestamp */}
           <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-widest w-20">Time</span>
             <p className="text-xs font-mono text-slate-500">{log.timestamp}</p>
           </div>
         </div>
 
-        {/* Footer */}
         <div className="px-6 py-4 border-t border-slate-100">
           <button onClick={onClose}
             className="w-full h-10 rounded-xl font-semibold text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all">

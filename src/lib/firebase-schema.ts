@@ -28,6 +28,8 @@ export interface UserRecord {
   program?: string;
   temporaryId?: string;   // "TEMP-{ts}" for visitors until promoted
   addedAt?: string;       // ISO timestamp of registration
+  avatarUrl?: string | null; // Google photoURL stored on registration
+  branchId?: string;         // assigned branch for multi-branch support
 }
 
 // ── Legacy aliases — keeps existing components working without full rewrite ──
@@ -74,6 +76,10 @@ export interface LibraryLogRecord {
   checkOutTimestamp?: string;
   purpose: string;
   studentName?: string;
+  avatarUrl?: string | null;   // Google photo URL snapshotted at check-in
+  branchId?: string;           // which library branch this log belongs to
+  autoCheckout?: boolean;      // true when closed by library schedule
+  checkoutReason?: string;     // e.g. 'library_closed'
 }
 
 // ── Blocked attempt log ────────────────────────────────────────────────────
@@ -262,6 +268,65 @@ export const PROGRAMS: Record<string, ProgramEntry[]> = {
     { code: 'BAFS', name: 'Bachelor of Arts in Foreign Service' },
   ],
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCHEMA ADDITIONS — paste these into src/lib/firebase-schema.ts
+// after the existing interfaces
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── /branches/{branchId} ─────────────────────────────────────────────────────
+export interface BranchRecord {
+  id:          string;   // doc ID, e.g. "main", "annex"
+  name:        string;   // display name, e.g. "Main Library"
+  address?:    string;
+  capacity?:   number;   // optional seat limit
+  isDefault:   boolean;  // only one branch has this true
+  createdAt:   string;
+}
+
+// ── /goals/{goalId} ──────────────────────────────────────────────────────────
+export interface GoalRecord {
+  id:        string;
+  deptID:    string;   // 'ALL' means institution-wide
+  branchId?: string;   // null = all branches
+  target:    number;   // weekly visit target
+  period:    'weekly' | 'monthly';
+  createdAt: string;
+  updatedBy: string;
+}
+
+// ── /scheduled_reports/{id} ──────────────────────────────────────────────────
+export interface ScheduledReportRecord {
+  id:          string;
+  label:       string;         // human-readable name
+  frequency:   'daily' | 'weekly' | 'monthly';
+  dayOfWeek?:  number;         // 0=Sun … 6=Sat, used when frequency='weekly'
+  template:    'activity' | 'violation' | 'comprehensive';
+  deptFilter:  string;         // 'All Departments' | deptID
+  createdBy:   string;
+  createdAt:   string;
+  lastGenerated?: string;
+  isActive:    boolean;
+}
+
+// ── /announcements/{id} ──────────────────────────────────────────────────────
+export interface AnnouncementRecord {
+  id:          string;
+  title:       string;
+  body:        string;
+  type:        'info' | 'warning' | 'alert';
+  imageUrl?:   string;  // final image URL (uploaded or pasted)
+  imagePath?:  string;  // Firebase Storage path — used for cleanup on delete
+  branchId?:   string;  // null = all branches
+  startAt:     string;  // ISO — when to start showing
+  endAt:       string;  // ISO — when to stop showing
+  createdBy:   string;
+  createdAt:   string;
+  isActive:    boolean;
+}
+
+// ── LibraryLogRecord branchId added below ────────────────────────────────────
+
 
 
 export function getProgramsByDeptID(deptID: string): ProgramEntry[] { return PROGRAMS[deptID] || []; }

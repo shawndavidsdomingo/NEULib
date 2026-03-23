@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { useUser, useAuth, useFirestore } from '@/firebase';
 import { GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
-import { getDocs, collection, query, where, limit } from 'firebase/firestore';
+import { getDocs, getDoc, collection, query, where, limit, orderBy } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { UserRecord } from '@/lib/firebase-schema';
 
@@ -60,6 +60,9 @@ export default function Home() {
   // and they haven't used a @neu.edu.ph email
   const [showNotRegisteredIdPopup, setShowNotRegisteredIdPopup] = useState(false);
 
+  // Default branch for the landing page kiosk (main library)
+  const [defaultBranchId, setDefaultBranchId] = useState<string | null>(null);
+
   const { user, isUserLoading } = useUser();
   const auth  = useAuth();
   const db    = useFirestore();
@@ -84,6 +87,15 @@ export default function Home() {
       sessionStorage.setItem('neu_user_role',  u.role  || '');
     }
   };
+
+  // Fetch the default branch (isDefault: true) on load
+  useEffect(() => {
+    getDocs(query(collection(db, 'branches'), where('isDefault', '==', true), limit(1)))
+      .then(snap => {
+        if (!snap.empty) setDefaultBranchId(snap.docs[0].id);
+      })
+      .catch(() => {}); // non-fatal — kiosk works without branch
+  }, [db]);
 
   useEffect(() => {
     const savedView  = sessionStorage.getItem('neu_view') as AppView | null;
@@ -243,6 +255,7 @@ export default function Home() {
         }
         onRegister={handleAutoRegister}
         preloadedUser={resolvedUser}
+        defaultBranchId={defaultBranchId}
       />
     );
     if (view === 'registration') return (
@@ -260,6 +273,7 @@ export default function Home() {
           onExit={handleExit}
           resolvedUser={resolvedUser}
           onSwitchToStudent={() => setView('terminal')}
+          suppressBranchPicker={showAdminWelcome}
         />
         {showAdminWelcome && (
           <WelcomeMessage

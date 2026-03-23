@@ -2,100 +2,128 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // Hard-whitelisted owner email — always super admin
-    function isOwnerEmail() {
-      return isSignedIn() &&
-        request.auth.token.email == "shawndavidsobremontedomingo@gmail.com";
+    function isAdminByEmail() {
+      return isSignedIn()
+        && request.auth.token.email == 'shawndavidsobremontedomingo@gmail.com';
     }
 
-    // Any signed-in user with an email (non-anonymous Google login).
-    // This intentionally uses != null check on email — works immediately
-    // after signInWithPopup without requiring a token refresh round-trip.
-    function isAuthenticatedUser() {
-      return isSignedIn() && request.auth.token.email != null;
+    function isAdminByDoc() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+             in ['admin', 'super_admin'];
     }
 
-    // NEU institutional email — covers all appointed staff (@neu.edu.ph)
-    // plus the hardcoded owner gmail
-    function isNEUEmail() {
-      return isAuthenticatedUser() &&
-        (request.auth.token.email.matches('.*@neu\\.edu\\.ph') ||
-         request.auth.token.email == "shawndavidsobremontedomingo@gmail.com");
+    function isSuperAdminByDoc() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+             == 'super_admin';
     }
 
-    // /users — unified collection
-    // Read: any signed-in user (including right after Google popup — isSignedIn()
-    // is satisfied immediately, avoiding token-propagation race conditions).
-    // Write guards remain strict.
+    function isAdminOrSuper() {
+      return isAdminByEmail() || isAdminByDoc();
+    }
+
+    function isSuperAdmin() {
+      return isAdminByEmail() || isSuperAdminByDoc();
+    }
+
+    // ── /users ───────────────────────────────────────────────────────────────
+    // Kiosk reads users to identify students (may be unauthenticated briefly)
     match /users/{userId} {
-      allow read:   if isSignedIn();
+      allow read:   if true;
       allow create: if isSignedIn();
-      allow update: if isOwnerEmail() ||
-                       isNEUEmail() ||
-                       (isAuthenticatedUser() && resource.data.email == request.auth.token.email);
-      allow delete: if isNEUEmail() || isOwnerEmail() || isAuthenticatedUser();
+      allow update: if isSignedIn() && (
+                      request.auth.uid == userId || isAdminOrSuper()
+                    );
+      allow delete: if isAdminOrSuper();
     }
 
-    match /departments/{deptID} {
-      allow read: if true;
-      allow write: if isNEUEmail() || isOwnerEmail();
-    }
-
+    // ── /library_logs ────────────────────────────────────────────────────────
+    // Kiosk reads logs to check existing sessions; writes check-in/out
     match /library_logs/{logId} {
-      allow read:   if isSignedIn();
+      allow read:   if true;
       allow create: if isSignedIn();
-      allow update: if isAuthenticatedUser();
-      allow delete: if isNEUEmail() || isOwnerEmail();
-    }
-
-    match /programs/{programId} {
-      allow read: if true;
-      allow write: if isNEUEmail() || isOwnerEmail();
-    }
-
-    match /notifications/{notifId} {
-      allow read:   if isSignedIn();
-      allow create: if isAuthenticatedUser();
       allow update: if isSignedIn();
-      allow delete: if isAuthenticatedUser();
+      allow delete: if isAdminOrSuper();
     }
 
-    // /visit_purposes — public read so anonymous kiosk can fetch
-    match /visit_purposes/{purposeId} {
-      allow read:  if true;
-      allow write: if isNEUEmail() || isOwnerEmail();
+    // ── /departments ─────────────────────────────────────────────────────────
+    // Kiosk reads departments for dropdown; registration page reads before login
+    match /departments/{docId} {
+      allow read:   if true;
+      allow write:  if isAdminOrSuper();
     }
 
-    // /audit_logs — append-only, immutable
-    match /audit_logs/{logId} {
-      allow read:   if isNEUEmail() || isOwnerEmail();
-      allow create: if isAuthenticatedUser();
-      allow update: if false;
-      allow delete: if isNEUEmail() || isOwnerEmail();
+    // ── /programs ────────────────────────────────────────────────────────────
+    match /programs/{docId} {
+      allow read:   if true;
+      allow write:  if isAdminOrSuper();
     }
 
-    // /credential_requests
-    match /credential_requests/{reqId} {
-      allow read:   if isAuthenticatedUser();
+    // ── /visit_purposes ──────────────────────────────────────────────────────
+    // Kiosk reads active purposes for the check-in dropdown
+    match /visit_purposes/{docId} {
+      allow read:   if true;
+      allow write:  if isAdminOrSuper();
+    }
+
+    // ── /announcements ───────────────────────────────────────────────────────
+    // Kiosk shows announcements on idle screen before any auth
+    match /announcements/{docId} {
+      allow read:   if true;
+      allow write:  if isAdminOrSuper();
+    }
+
+    // ── /branches ────────────────────────────────────────────────────────────
+    // Kiosk reads branch schedule for auto-checkout
+    match /branches/{docId} {
+      allow read:   if true;
+      allow write:  if isSuperAdmin();
+    }
+
+    // ── /blocked_attempts ────────────────────────────────────────────────────
+    match /blocked_attempts/{docId} {
+      allow read:   if isSignedIn();
       allow create: if isSignedIn();
-      allow update: if isNEUEmail() || isOwnerEmail();
-      allow delete: if isOwnerEmail();
+      allow update, delete: if isAdminOrSuper();
     }
 
-    // /blocked_attempts — written by kiosk when a restricted user taps in.
-    // Admins/staff can read; any signed-in user (including kiosk session) can create.
-    // Updates restricted to NEU/admin accounts only — needed for studentId cascade
-    // when an ID change request is approved. Records are otherwise append-only.
-    match /blocked_attempts/{attemptId} {
-      allow read:   if isNEUEmail() || isOwnerEmail();
+    // ── /audit_logs ──────────────────────────────────────────────────────────
+    // Only super admins can read audit logs; all admins can create (write-only audit trail)
+    match /audit_logs/{docId} {
+      allow read:   if isSuperAdmin();
+      allow create: if isAdminOrSuper();
+      allow update, delete: if false;
+    }
+
+    // ── /credential_requests ─────────────────────────────────────────────────
+    match /credential_requests/{docId} {
+      allow read:   if isSignedIn();
       allow create: if isSignedIn();
-      allow update: if isNEUEmail() || isOwnerEmail();
-      allow delete: if isOwnerEmail();
+      allow update: if isAdminOrSuper();
+      allow delete: if isAdminOrSuper();
     }
 
+    // ── /goals ───────────────────────────────────────────────────────────────
+    match /goals/{docId} {
+      allow read:   if isSignedIn();
+      allow write:  if isSignedIn();
+    }
+
+    // ── /scheduled_reports ───────────────────────────────────────────────────
+    // Readable/writable by any signed-in user — UI gates access to admin role only
+    // isAdminOrSuper() uses get() which can fail for regular admins on first load
+    match /scheduled_reports/{docId} {
+      allow read:   if isSignedIn();
+      allow write:  if isSignedIn();
+    }
   }
 }

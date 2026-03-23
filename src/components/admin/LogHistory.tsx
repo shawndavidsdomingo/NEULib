@@ -1,5 +1,6 @@
 "use client";
 
+import { StudentAvatar } from '@/components/ui/StudentAvatar';
 import { useState, useMemo, useEffect } from 'react';
 import { format, parseISO, isToday, differenceInMinutes, startOfDay, subDays } from 'date-fns';
 import { History, Search, Filter, Loader2, ArrowUpDown, ArrowUp, ArrowDown, RotateCcw, AlertTriangle } from 'lucide-react';
@@ -39,7 +40,7 @@ function formatId(id: string) {
   return `${d.slice(0,2)}-${d.slice(2,7)}-${d.slice(7,10)}`;
 }
 
-export function LogHistory() {
+export function LogHistory({ branchId }: { branchId?: string | null }) {
   const db = useFirestore();
 
   const [search,        setSearch]        = useState('');
@@ -59,6 +60,14 @@ export function LogHistory() {
 
   const deptRef = useMemoFirebase(() => collection(db, 'departments'), [db]);
   const { data: depts } = useCollection<DepartmentRecord>(deptRef);
+
+  // Branch names for display
+  const branchesRef = useMemoFirebase(() => collection(db, 'branches'), [db]);
+  const { data: branches } = useCollection<{ id: string; name: string }>(branchesRef);
+  const branchNames = useMemo(
+    () => Object.fromEntries((branches || []).map(b => [b.id, b.name])),
+    [branches]
+  );
 
   // For role filtering — build studentId → role map
   const usersRef2 = useMemoFirebase(() => collection(db, 'users'), [db]);
@@ -99,6 +108,8 @@ export function LogHistory() {
     ? '2024-01-01T00:00:00.000Z'
     : subDays(startOfDay(new Date()), parseInt(dateRange)).toISOString();
 
+  // Always use a simple single-field query to avoid composite index requirement.
+  // Branch filtering is applied client-side in the useMemo below.
   const logsQ = useMemoFirebase(
     () => query(
       collection(db, 'library_logs'),
@@ -121,6 +132,7 @@ export function LogHistory() {
     if (!allLogs) return [];
     const s = search.toLowerCase();
     return allLogs.filter(l => {
+      const matchBranch = !branchId || (l as any).branchId === branchId || !(l as any).branchId;
       const matchS  = !s || (l.studentName||'').toLowerCase().includes(s) || l.studentId.toLowerCase().includes(s);
       const matchD  = deptFilter    === 'All Departments' || l.deptID  === deptFilter;
       const matchP  = purposeFilter === 'All Purposes'    || l.purpose === purposeFilter;
@@ -131,12 +143,15 @@ export function LogHistory() {
         || (roleFilter === 'Student' && !isStaff)
         || (roleFilter === 'Staff'   && isStaff);
       const ci      = parseISO(l.checkInTimestamp);
-      const noTap   = !l.checkOutTimestamp && !isToday(ci);
+      // No Tap: no checkout AND (from a previous day OR auto-checked-out as library_closed)
+      const noTap   = !l.checkOutTimestamp && !isToday(ci)
+        || (l.autoCheckout && (l as any).checkoutReason === 'library_closed');
+      const active  = !l.checkOutTimestamp && isToday(ci) && !(l.autoCheckout && (l as any).checkoutReason === 'library_closed');
       const matchSt = statusFilter === 'All'
-        || (statusFilter === 'Active'    && !l.checkOutTimestamp && isToday(ci))
-        || (statusFilter === 'Completed' && !!l.checkOutTimestamp)
+        || (statusFilter === 'Active'    && active)
+        || (statusFilter === 'Completed' && !!l.checkOutTimestamp && !l.autoCheckout)
         || (statusFilter === 'No Tap'    && noTap);
-      return matchS && matchD && matchP && matchSt && matchRole;
+      return matchBranch && matchS && matchD && matchP && matchSt && matchRole;
     }).sort((a, b) => {
       let va = '', vb = '';
       if      (sortField === 'studentName')       { va = a.studentName||''; vb = b.studentName||''; }
@@ -151,13 +166,13 @@ export function LogHistory() {
         return sortDir === 'asc' ? da - db2 : db2 - da;
       }
       else if (sortField === 'status') {
-        const stat = (l: LibraryLogRecord) => l.checkOutTimestamp ? 'done' : isToday(parseISO(l.checkInTimestamp)) ? 'active' : 'notap';
+        const stat = (l: LibraryLogRecord) => l.checkOutTimestamp ? 'done' : (isToday(parseISO(l.checkInTimestamp)) && !(l.autoCheckout && (l as any).checkoutReason === 'library_closed')) ? 'active' : 'notap';
         va = stat(a); vb = stat(b);
       }
       const cmp = va < vb ? -1 : va > vb ? 1 : 0;
       return sortDir === 'asc' ? cmp : -cmp;
     });
-  }, [allLogs, search, deptFilter, purposeFilter, statusFilter, roleFilter, sortField, sortDir, userRoleMap]);
+  }, [allLogs, search, deptFilter, purposeFilter, statusFilter, roleFilter, sortField, sortDir, userRoleMap, branchId]);
 
   // Three-state sort: asc → desc → reset to default
   const toggleSort = (f: SortField) => {
@@ -242,9 +257,11 @@ export function LogHistory() {
                     <tr key={a.id || i} className="border-b border-slate-50 transition-colors" style={{background:'rgba(239,68,68,0.03)',height:56}}>
                       <td className="pl-5 py-3">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0 bg-red-400">
-                            {(a.studentName||'?')[0]}
-                          </div>
+                          <StudentAvatar
+                            name={a.studentName || '?'}
+                            avatarUrl={a.avatarUrl}
+                            fallbackBg="#f87171"
+                          />
                           <span className="font-semibold text-sm text-red-700">{a.studentName||'Unknown'}</span>
                         </div>
                       </td>
@@ -433,23 +450,29 @@ export function LogHistory() {
                   <TableHead className={`text-right pr-5 ${thStyle}`} onClick={() => toggleSort('status')}>
                     Status <SortIcon field="status" />
                   </TableHead>
+                  {!branchId && (
+                    <TableHead className={thStyle}>Branch</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filtered.slice((lhPage-1)*lhRpp, lhPage*lhRpp).map(l => {
                   const ci     = parseISO(l.checkInTimestamp);
-                  const noTap  = !l.checkOutTimestamp && !isToday(ci);
-                  const active = !l.checkOutTimestamp && isToday(ci);
+                  const noTap  = (!l.checkOutTimestamp && !isToday(ci))
+                    || (l.autoCheckout && (l as any).checkoutReason === 'library_closed');
+                  const active = !l.checkOutTimestamp && isToday(ci)
+                    && !(l.autoCheckout && (l as any).checkoutReason === 'library_closed');
                   return (
                     <TableRow key={l.id} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors" style={{ height: 60 }}>
 
                       {/* Name */}
                       <TableCell className="pl-5">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white flex-shrink-0"
-                            style={{ background: active ? `linear-gradient(135deg,${navy},hsl(221,60%,35%))` : '#94a3b8' }}>
-                            {(l.studentName||'S').split(',')[0]?.trim()[0]||'S'}
-                          </div>
+                          <StudentAvatar
+                            name={l.studentName || 'S'}
+                            avatarUrl={(l as any).avatarUrl}
+                            fallbackBg={active ? `linear-gradient(135deg,${navy},hsl(221,60%,35%))` : '#94a3b8'}
+                          />
                           <span className="font-semibold text-slate-900 text-sm truncate max-w-[120px] sm:max-w-none">
                             {l.studentName || 'Student'}
                           </span>
@@ -514,6 +537,19 @@ export function LogHistory() {
                           <span className="text-xs font-bold px-2.5 py-1.5 rounded-full bg-blue-50 text-blue-600 animate-pulse">Active</span>
                         )}
                       </TableCell>
+                      {/* Branch */}
+                      {!branchId && (
+                        <TableCell>
+                          {(l as any).branchId ? (
+                            <span className="text-xs font-bold px-2 py-0.5 rounded-md whitespace-nowrap"
+                              style={{ background: 'rgba(10,26,77,0.07)', color: 'hsl(221,72%,22%)' }}>
+                              {branchNames[(l as any).branchId] ?? (l as any).branchId}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-300">—</span>
+                          )}
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}
@@ -564,7 +600,7 @@ export function LogHistory() {
       </div>
     </>
     )}
-          {(() => {
+      {logView === 'blocked' && (() => {
             const _tot = (blockedAttempts||[]).length;
             const _pg  = Math.ceil(_tot / lhBRpp);
             if (_tot === 0) return null;

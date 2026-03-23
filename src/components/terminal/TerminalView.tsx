@@ -1,4 +1,5 @@
 "use client";
+import React from 'react';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
@@ -8,13 +9,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { CheckCircle2, Scan, ArrowRight, Loader2, Radio, ArrowLeft, LogOut, GraduationCap, Building2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { useFirestore, addDocumentNonBlocking, setDocumentNonBlocking, updateDocumentNonBlocking, useAuth, useUser } from '@/firebase';
-import { collection, query, where, limit, doc, getDoc, getDocs, orderBy, setDoc } from 'firebase/firestore';
+import { collection, query, where, limit, doc, getDoc, getDocs, orderBy, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
 import { signInAnonymously, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { isToday, parseISO } from 'date-fns';
+import { isToday, parseISO, format, isAfter, isBefore } from 'date-fns';
 import { formatStudentId } from '@/lib/student-id-formatter';
 import { libraryLogId } from '@/lib/firestore-ids';
 import { StudentRecord, UserRecord, DEPARTMENTS, PROGRAMS, ProgramRecord } from '@/lib/firebase-schema';
 import { CredentialRequestModal } from '@/components/student/CredentialRequestModal';
+import { KioskAnnouncementBanner } from '@/components/kiosk/KioskAnnouncementBanner';
 
 const FALLBACK_PURPOSES = [
   { value: 'Reading Books', label: 'Reading & Private Study' },
@@ -23,17 +25,107 @@ const FALLBACK_PURPOSES = [
   { value: 'Assignments',   label: 'Academic Assignments' },
 ];
 
+// ── Library schedule type (matches /branches/{id}.schedule) ──────────────────
+interface DaySchedule {
+  open:   string; // "07:30"
+  close:  string; // "21:00"
+  closed: boolean;
+}
+
+type WeekSchedule = {
+  [key in 'mon'|'tue'|'wed'|'thu'|'fri'|'sat'|'sun']: DaySchedule;
+};
+
 interface TerminalViewProps {
   onComplete?: () => void;
   onAdminReturn?: () => void;
-  // Called when an unregistered NEU email is detected — auto-redirect to registration
   onRegister?: (email: string) => void;
-  // Pre-loaded user from registration — skips auth, goes straight to purpose
   preloadedUser?: UserRecord | null;
+  defaultBranchId?: string | null;  // fallback when no ?branch= URL param
 }
 
-export default function TerminalView({ onComplete, onAdminReturn, onRegister, preloadedUser }: TerminalViewProps) {
-  // If a newly registered user is passed in, check if they have deptID before determining step
+// ── Read branchId from URL param ?branch=xxx ──────────────────────────────────
+function getKioskBranchId(): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.search).get('branch');
+}
+
+// ── Parse "HH:MM" to today's Date ────────────────────────────────────────────
+function parseTimeToday(time: string): Date {
+  const [h, m] = time.split(':').map(Number);
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return d;
+}
+
+// ── Get today's day key ───────────────────────────────────────────────────────
+// Returns { isOpen, reason, openTime, closeTime } based on current time vs schedule
+function checkLibraryHours(schedule: WeekSchedule | null): {
+  isOpen: boolean;
+  reason: 'open' | 'closed_today' | 'not_yet_open' | 'already_closed' | 'no_schedule';
+  openTime?: string;   // formatted "7:00 AM"
+  closeTime?: string;  // formatted "6:00 PM"
+} {
+  if (!schedule) return { isOpen: true, reason: 'no_schedule' }; // no schedule = always open
+  const key = (['sun','mon','tue','wed','thu','fri','sat'] as const)[new Date().getDay()];
+  const day = schedule[key];
+  if (!day || day.closed) return { isOpen: false, reason: 'closed_today' };
+  const now   = new Date();
+  const open  = parseTimeToday(day.open);
+  const close = parseTimeToday(day.close);
+  const fmt   = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  if (now < open)  return { isOpen: false, reason: 'not_yet_open',  openTime: fmt(open),  closeTime: fmt(close) };
+  if (now >= close) return { isOpen: false, reason: 'already_closed', openTime: fmt(open), closeTime: fmt(close) };
+  return { isOpen: true, reason: 'open', openTime: fmt(open), closeTime: fmt(close) };
+}
+
+function todayKey(): keyof WeekSchedule {
+  const keys: (keyof WeekSchedule)[] = ['sun','mon','tue','wed','thu','fri','sat'];
+  return keys[new Date().getDay()];
+}
+
+
+// ── Kiosk avatar: shows photo if available, falls back to initial ─────────────
+function KioskAvatar({
+  name, avatarUrl, size = 64, rounded = '1rem', shadow = true,
+}: {
+  name: string; avatarUrl?: string | null;
+  size?: number; rounded?: string; shadow?: boolean;
+}) {
+  const initial = (name || 'V')[0].toUpperCase();
+  const [imgFailed, setImgFailed] = React.useState(false);
+
+  if (avatarUrl && !imgFailed) {
+    return (
+      <img
+        src={avatarUrl}
+        alt={name}
+        onError={() => setImgFailed(true)}
+        style={{
+          width: size, height: size, borderRadius: rounded,
+          objectFit: 'cover',
+          border: '2.5px solid rgba(255,255,255,0.35)',
+          boxShadow: shadow ? '0 4px 16px rgba(0,0,0,0.2)' : 'none',
+          display: 'block',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: rounded,
+      background: 'linear-gradient(135deg,hsl(43,85%,55%),hsl(38,90%,44%))',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: 'white', fontWeight: 800, fontSize: size * 0.38,
+      boxShadow: shadow ? '0 4px 16px rgba(0,0,0,0.15)' : 'none',
+    }}>
+      {initial}
+    </div>
+  );
+}
+
+export default function TerminalView({ onComplete, onAdminReturn, onRegister, preloadedUser, defaultBranchId }: TerminalViewProps) {
   const needsDeptStep = preloadedUser && (!preloadedUser.deptID || preloadedUser.deptID === '');
   const [step,              setStep]              = useState<'auth' | 'dept' | 'purpose' | 'success'>(
     preloadedUser ? (needsDeptStep ? 'dept' : 'purpose') : 'auth'
@@ -55,7 +147,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
   const [isRegisteringFromPopup, setIsRegisteringFromPopup] = useState(false);
   const [blockedStudent,    setBlockedStudent]    = useState<{ name: string } | null>(null);
   const [blockedCountdown,  setBlockedCountdown]  = useState(5);
-  const [blockedInsideModal, setBlockedInsideModal] = useState(false); // shows when blocked user tries to checkout
+  const [blockedInsideModal, setBlockedInsideModal] = useState(false);
   const [sessionDuration,   setSessionDuration]   = useState<{ hours: number; minutes: number } | null>(null);
 
   // Dept/program for visitors
@@ -65,9 +157,20 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
   const [deptPrograms,    setDeptPrograms]    = useState<ProgramRecord[]>([]);
   const [isLoadingProgs,  setIsLoadingProgs]  = useState(false);
 
-  // Contact admin modal state
+  // Contact admin modal
   const [showContactAdmin, setShowContactAdmin] = useState(false);
   const [contactAdminUser, setContactAdminUser] = useState<UserRecord | null>(null);
+
+  // ── Branch + schedule ────────────────────────────────────────────────────
+  // Use URL param first, fall back to prop (set by landing page for main library)
+  const kioskBranchId = useMemo(() => getKioskBranchId() ?? defaultBranchId ?? null, [defaultBranchId]);
+  const [branchSchedule, setBranchSchedule] = useState<WeekSchedule | null>(null);
+  const [branchName,     setBranchName]     = useState<string | null>(null);
+  const [closedMsg,      setClosedMsg]      = useState<string | null>(null); // set when library is closed
+
+  // Derived: is library currently closed based on schedule?
+  const libraryHours  = branchSchedule ? checkLibraryHours(branchSchedule) : null;
+  const isLibraryClosed = libraryHours ? !libraryHours.isOpen : false;
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -81,7 +184,69 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     if (step === 'auth' && inputRef.current) inputRef.current.focus();
   }, [step, authUser, auth]);
 
-  // ── Dynamic purposes from Firestore — only active ones for kiosk ──────────
+  // ── Load branch schedule ──────────────────────────────────────────────────
+  useEffect(() => {
+    if (!kioskBranchId) return;
+    getDoc(doc(db, 'branches', kioskBranchId)).then(snap => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (data.name) setBranchName(data.name as string);
+        if (data.schedule) setBranchSchedule(data.schedule as WeekSchedule);
+      }
+    }).catch(() => {});
+  }, [kioskBranchId, db]);
+
+  // ── Auto-checkout open sessions at library closing time ──────────────────
+  // Runs every minute. If current time is past today's closing time,
+  // all open sessions for this branch are auto-closed and marked "NO TAP".
+  useEffect(() => {
+    if (!branchSchedule) return;
+
+    const checkAndAutoClose = async () => {
+      const key = todayKey();
+      const today = branchSchedule[key];
+      if (!today || today.closed) return;
+
+      const closeTime = parseTimeToday(today.close);
+      const now = new Date();
+      if (isBefore(now, closeTime)) return; // not closing time yet
+
+      try {
+        const q = query(
+          collection(db, 'library_logs'),
+          where('checkOutTimestamp', '==', null),
+          ...(kioskBranchId ? [where('branchId', '==', kioskBranchId)] : [])
+        );
+        const snap = await getDocs(q);
+        if (snap.empty) return;
+
+        // Only close sessions from today
+        const toClose = snap.docs.filter(d => {
+          const checkIn = d.data().checkInTimestamp;
+          return checkIn && isToday(parseISO(checkIn));
+        });
+
+        if (!toClose.length) return;
+
+        const batch = writeBatch(db);
+        const closeTs = closeTime.toISOString();
+        toClose.forEach(d => {
+          batch.update(d.ref, {
+            checkOutTimestamp: closeTs,
+            autoCheckout: true,      // flag so reports can identify these
+            checkoutReason: 'library_closed',
+          });
+        });
+        await batch.commit();
+      } catch { /* non-fatal */ }
+    };
+
+    checkAndAutoClose(); // run immediately on mount
+    const interval = setInterval(checkAndAutoClose, 60_000); // then every minute
+    return () => clearInterval(interval);
+  }, [branchSchedule, db, kioskBranchId]);
+
+  // ── Dynamic purposes ──────────────────────────────────────────────────────
   const [livePurposes, setLivePurposes] = useState<{ value: string; label: string }[]>([]);
   useEffect(() => {
     getDocs(query(collection(db, 'visit_purposes'), where('active', '==', true)))
@@ -89,8 +254,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         if (snap.empty) { setLivePurposes(FALLBACK_PURPOSES); return; }
         const sorted = snap.docs
           .map(d => d.data() as { value: string; label: string; order?: number })
-          // Primary sort: explicit `order` field (admin-defined priority).
-          // Secondary sort: alphabetical by label for a consistent fallback.
           .sort((a, b) => {
             const orderDiff = (a.order ?? 99) - (b.order ?? 99);
             if (orderDiff !== 0) return orderDiff;
@@ -104,7 +267,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
   // Load departments
   useEffect(() => {
     getDocs(collection(db, 'departments')).then(snap => {
-      // Use DEPARTMENTS key insertion order as canonical sort — LIBRARY first, then colleges alphabetically
       const DEPT_ORDER = Object.keys(DEPARTMENTS);
       setAllDepts(
         snap.docs
@@ -112,10 +274,10 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           .sort((a, b) => {
             const ai = DEPT_ORDER.indexOf(a.deptID);
             const bi = DEPT_ORDER.indexOf(b.deptID);
-            if (ai !== -1 && bi !== -1) return ai - bi;   // both known — use schema order
-            if (ai !== -1) return -1;                       // a known, b unknown — a first
-            if (bi !== -1) return 1;                        // b known, a unknown — b first
-            return a.departmentName.localeCompare(b.departmentName); // both unknown — alpha
+            if (ai !== -1 && bi !== -1) return ai - bi;
+            if (ai !== -1) return -1;
+            if (bi !== -1) return 1;
+            return a.departmentName.localeCompare(b.departmentName);
           })
       );
     });
@@ -128,7 +290,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     setVisitorProgram('');
     getDocs(query(collection(db, 'programs'), where('deptID', '==', visitorDeptId)))
       .then(snap => {
-        // Use PROGRAMS schema insertion order — Staff/Faculty always first, then programs as declared
         const schemaOrder = (PROGRAMS[visitorDeptId] ?? []).map(p => p.code);
         setDeptPrograms(
           snap.docs
@@ -136,10 +297,9 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
             .sort((a, b) => {
               const ai = schemaOrder.indexOf(a.code);
               const bi = schemaOrder.indexOf(b.code);
-              if (ai !== -1 && bi !== -1) return ai - bi;   // both in schema — use schema order
+              if (ai !== -1 && bi !== -1) return ai - bi;
               if (ai !== -1) return -1;
               if (bi !== -1) return 1;
-              // Fallback: Staff/Faculty codes always first, then alpha
               const aStaff = a.code.endsWith('-STAFF');
               const bStaff = b.code.endsWith('-STAFF');
               if (aStaff && !bStaff) return -1;
@@ -162,7 +322,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
 
   useEffect(() => { if (step === 'success' && countdown <= 0) handleReset(); }, [step, countdown]);
 
-  // Auto-dismiss blocked alert after 5 seconds
   useEffect(() => {
     if (!blockedStudent) { setBlockedCountdown(5); return; }
     setBlockedCountdown(5);
@@ -190,8 +349,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     else           { setStep('purpose'); }
   };
 
-  // Checks if a blocked user has an active session today → shows "blocked inside" modal.
-  // Returns true if an active session was found (caller should not show entry-restriction modal).
   const checkBlockedActiveSession = async (studentId: string): Promise<boolean> => {
     try {
       const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -211,49 +368,104 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
   };
 
   const checkExistingLogs = async (student: StudentRecord, needsDept: boolean) => {
-    const q = query(collection(db, 'library_logs'),
+    // ── Branch-aware tap logic ────────────────────────────────────────────────
+    //
+    // Rules:
+    //  1. Open session on SAME branch  → tap-out (normal checkout)
+    //  2. Open session on DIFF branch  → auto-close that session (student moved
+    //                                    to a new library), then new check-in here
+    //  3. No open session anywhere     → new check-in
+    //
+    // Example flow:
+    //   Tap NEU Main → check-in (branchId: neu-main)
+    //   Tap SOM Lib  → auto-closes NEU Main session, new check-in at SOM Lib
+    //   Tap SOM Lib  → tap-out at SOM Lib
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Fetch recent logs for this student (client-side filtering, no composite index)
+    const q = query(
+      collection(db, 'library_logs'),
       where('studentId', '==', student.studentId),
-      orderBy('checkInTimestamp', 'desc'), limit(1));
+      orderBy('checkInTimestamp', 'desc'),
+      limit(10)
+    );
     const snap = await getDocs(q);
 
-    if (!snap.empty) {
-      const log = snap.docs[0].data();
-      if (!log.checkOutTimestamp && isToday(parseISO(log.checkInTimestamp))) {
-        // Blocked checkout intercept: if student is blocked and trying to check out,
-        // show a persistent modal instead of completing the checkout
-        if (student.isBlocked || (student as any).status === 'blocked') {
-          setIdentifiedStudent(student);
-          setBlockedInsideModal(true);
-          return;
-        }
+    // Separate: open session on this branch vs open session on a different branch
+    const sameBranchDoc = snap.docs.find(d => {
+      const data = d.data();
+      if (data.checkOutTimestamp) return false;
+      if (!isToday(parseISO(data.checkInTimestamp))) return false;
+      if (kioskBranchId) return data.branchId === kioskBranchId;
+      return true; // no branch config — match any
+    });
 
-        const checkOutNow = new Date();
-        updateDocumentNonBlocking(doc(db, 'library_logs', snap.docs[0].id),
-          { checkOutTimestamp: checkOutNow.toISOString() });
+    const otherBranchDoc = !sameBranchDoc ? snap.docs.find(d => {
+      const data = d.data();
+      if (data.checkOutTimestamp) return false;
+      if (!isToday(parseISO(data.checkInTimestamp))) return false;
+      if (kioskBranchId) return data.branchId !== kioskBranchId && !!data.branchId;
+      return false;
+    }) : undefined;
 
-        // Compute how long the student was inside
-        const checkInTime  = parseISO(log.checkInTimestamp);
-        const totalMinutes = Math.max(0, Math.floor((checkOutNow.getTime() - checkInTime.getTime()) / 60000));
-        setSessionDuration({ hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 });
+    // ── Case 1: Open session on same branch → tap-out ────────────────────────
+    if (sameBranchDoc) {
+      const log   = sameBranchDoc.data();
+      const logId = sameBranchDoc.id;
 
+      if (student.isBlocked || (student as any).status === 'blocked') {
         setIdentifiedStudent(student);
-        setLastAction('checkout');
-        setStep('success');
+        setBlockedInsideModal(true);
         return;
       }
+
+      const checkOutNow  = new Date();
+      updateDocumentNonBlocking(doc(db, 'library_logs', logId),
+        { checkOutTimestamp: checkOutNow.toISOString() });
+
+      const checkInTime  = parseISO(log.checkInTimestamp);
+      const totalMinutes = Math.max(0, Math.floor(
+        (checkOutNow.getTime() - checkInTime.getTime()) / 60000
+      ));
+      setSessionDuration({ hours: Math.floor(totalMinutes / 60), minutes: totalMinutes % 60 });
+
+      setIdentifiedStudent(student);
+      setLastAction('checkout');
+      setStep('success');
+      return;
     }
+
+    // ── Case 2: Open session on a DIFFERENT branch → auto-close it, then check-in ──
+    if (otherBranchDoc) {
+      // Silently close the other-branch session with current time
+      // Mark it as auto-closed due to branch transfer so reports can identify it
+      updateDocumentNonBlocking(doc(db, 'library_logs', otherBranchDoc.id), {
+        checkOutTimestamp: new Date().toISOString(),
+        autoCheckout:      true,
+        checkoutReason:    'branch_transfer',
+      });
+      // Fall through to new check-in below
+    }
+
+    // ── Case 3 (or after Case 2): No same-branch session → new check-in ──────
+    if (student.isBlocked || (student as any).status === 'blocked') {
+      setIdentifiedStudent(student);
+      const isInside = await checkBlockedActiveSession(student.studentId);
+      if (!isInside) setBlockedStudent({ name: student.firstName || 'Student' });
+      return;
+    }
+
     goToNextStep(student, needsDept);
   };
 
   const handleIdentify = async (input: string) => {
     const cleanId = input.trim();
     if (!cleanId) return;
+
     setIsSearching(true);
     try {
-      // 1. Check /users by doc ID
       let userDoc = await getDoc(doc(db, 'users', cleanId));
 
-      // 2. Try by email
       if (!userDoc.exists()) {
         const emailSnap = await getDocs(
           query(collection(db, 'users'), where('email', '==', cleanId.toLowerCase()), limit(1))
@@ -265,13 +477,10 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         const data = userDoc.data() as UserRecord;
         if (data.status === 'blocked') {
           const sid = data.id || cleanId;
-          // If they have an active session today, show "blocked inside" modal instead
           const isInside = await checkBlockedActiveSession(sid);
           if (!isInside) {
-            // Not inside — show entry restriction (auto-dismisses in 5s)
             setBlockedStudent({ name: data.firstName || 'Student' });
           }
-          // Always log the blocked attempt
           try {
             const attemptRef = doc(collection(db, 'blocked_attempts'));
             setDoc(attemptRef, {
@@ -288,12 +497,12 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           ...data, id: data.id || cleanId,
           studentId: data.id || cleanId,
           isBlocked: (data.status as string) === 'blocked',
-        };
+          avatarUrl: (data as any).avatarUrl ?? null,
+        } as StudentRecord & { avatarUrl?: string | null };
         await checkExistingLogs(asStudent, !data.deptID || data.deptID === '');
         return;
       }
 
-      // 3. Check by temporaryId
       const tvSnap = await getDocs(query(collection(db, 'users'), where('temporaryId', '==', cleanId), limit(1)));
       if (!tvSnap.empty) {
         const tv = tvSnap.docs[0].data();
@@ -308,15 +517,12 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         return;
       }
 
-      // Not found — show not registered info
-      // Not found — show popup card
       setShowNotRegistered(true);
     } catch {
       toast({ title: 'Registry Error', variant: 'destructive' });
     } finally { setIsSearching(false); }
   };
 
-  // Called from the "Not Registered" popup — runs full Google OAuth then redirects to registration
   const handleRegisterFromPopup = async () => {
     setShowNotRegistered(false);
     setIsRegisteringFromPopup(true);
@@ -332,7 +538,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         return;
       }
 
-      // Already registered? Proceed to kiosk
       const uSnap = await getDocs(query(collection(db, 'users'), where('email', '==', email), limit(1)));
       if (!uSnap.empty) {
         const u = uSnap.docs[0].data() as UserRecord;
@@ -347,7 +552,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         return;
       }
 
-      // Not in DB → go to registration form
       if (onRegister) onRegister(email!);
     } catch (err: any) {
       if (err?.code !== 'auth/popup-closed-by-user' && err?.code !== 'auth/cancelled-popup-request') {
@@ -370,11 +574,17 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         return;
       }
 
-      // Look up by email in /users
       const uSnap = await getDocs(query(collection(db, 'users'), where('email', '==', email), limit(1)));
 
       if (!uSnap.empty) {
         const u = uSnap.docs[0].data() as UserRecord;
+
+        // ── Persist Google avatar to user record if missing ──────────────
+        const photoURL = result.user.photoURL;
+        if (photoURL && !u.avatarUrl) {
+          updateDoc(doc(db, 'users', u.id), { avatarUrl: photoURL }).catch(() => {});
+        }
+
         if (u.status === 'blocked') {
           const isInside = await checkBlockedActiveSession(u.id);
           if (!isInside) {
@@ -399,19 +609,17 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           lastName: u.lastName, email: u.email,
           deptID: u.deptID || '', program: u.program || '',
           role: u.role, status: u.status, isBlocked: (u.status as string) === 'blocked',
-        };
+          avatarUrl: (u as any).avatarUrl || result.user.photoURL || null,
+        } as StudentRecord & { avatarUrl?: string | null };
         await checkExistingLogs(asStudent, !isAdmin && (!u.deptID || u.deptID === ''));
         return;
       }
 
-      // ── AUTO-REDIRECT: NEU email not in database → registration ──────────
-      // No manual register button needed — this handles it automatically
       if (email?.endsWith('@neu.edu.ph') && onRegister) {
         onRegister(email);
         return;
       }
 
-      // Not found — show popup card
       setShowNotRegistered(true);
     } catch {
       toast({ title: 'Authentication Failed', variant: 'destructive' });
@@ -426,20 +634,39 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     setStep('purpose');
   };
 
-  const handleCheckIn = () => {
+  const handleCheckIn = async () => {
     if (!purpose || !identifiedStudent) return;
+
+    // ── Hours check — only block NEW check-ins, not tap-outs ─────────────
+    // (tap-outs are handled in checkExistingLogs and never reach here)
+    const hours = checkLibraryHours(branchSchedule);
+    if (!hours.isOpen) {
+      const lib  = branchName ?? 'Library';
+      const name = identifiedStudent.firstName || '';
+      const msg  = hours.reason === 'not_yet_open'
+        ? `Sorry${name ? `, ${name}` : ''}! ${lib} will open at ${hours.openTime}.`
+        : `Sorry${name ? `, ${name}` : ''}! ${lib} is now closed.`;
+      setClosedMsg(msg);
+      return;
+    }
+
     if (!identifiedStudent.deptID) {
       toast({ title: 'Missing Information', description: 'Department information is required.', variant: 'destructive' });
       setStep('dept');
       setIsVisitor(true);
       return;
     }
-    // Document ID format: [timestamp]_[deptID]_[studentName]_[suffix]
-    // e.g. 2025-03-20T08-15-32.441Z_CICS_DELA_CRUZ-Juan_a3f9
-    // Snapshot deptID + program at check-in time so historical logs
-    // are never affected if the student later changes their dept/program.
+
     const studentName = `${(identifiedStudent.lastName || '').toUpperCase()}, ${identifiedStudent.firstName}`;
     const logDocId    = libraryLogId(studentName, identifiedStudent.deptID);
+
+    // ── Fetch avatar from user record ────────────────────────────────────
+    let avatarUrl: string | null = null;
+    try {
+      const userSnap = await getDoc(doc(db, 'users', identifiedStudent.studentId));
+      avatarUrl = userSnap.data()?.avatarUrl ?? null;
+    } catch { /* non-fatal */ }
+
     setDocumentNonBlocking(
       doc(db, 'library_logs', logDocId),
       {
@@ -449,6 +676,8 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
         checkInTimestamp: new Date().toISOString(),
         purpose,
         studentName,
+        ...(avatarUrl       ? { avatarUrl }               : {}),
+        ...(kioskBranchId   ? { branchId: kioskBranchId } : {}),
       },
       { merge: false }
     );
@@ -469,27 +698,48 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
             style={{ transition: 'transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out' }}
             onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.transform = 'scale(1.01)'; (e.currentTarget as HTMLDivElement).style.boxShadow = '0 32px 64px rgba(0,0,0,0.35)'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.transform = 'scale(1)'; (e.currentTarget as HTMLDivElement).style.boxShadow = ''; }}>
-            {/* Blue gradient header — no glass */}
             <div className="px-8 pt-8 pb-8 text-center relative"
               style={{ background: 'linear-gradient(160deg,hsl(225,70%,42%) 0%,hsl(221,72%,28%) 60%,hsl(221,72%,22%) 100%)' }}>
               <button onClick={onComplete}
                 className="flex items-center gap-1.5 text-white/50 hover:text-white/80 font-bold text-[10px] uppercase tracking-widest mb-5 transition-all">
                 <ArrowLeft size={13} /> Main Portal
               </button>
-              {/* Solid icon — no backdrop-filter */}
               <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
                 style={{ background: 'rgba(255,255,255,0.20)' }}>
                 <Radio size={32} className="text-white animate-pulse" />
               </div>
-              <h1 className="text-4xl font-extrabold text-white tracking-tight" style={{ fontFamily: "'Playfair Display',serif" }}>
-                Library Kiosk
+              <h1 className="text-4xl font-extrabold text-white tracking-tight leading-tight" style={{ fontFamily: "'Playfair Display',serif" }}>
+                {branchName ? `${branchName} Kiosk` : 'Library Kiosk'}
               </h1>
               <p className="text-white/50 font-semibold uppercase tracking-widest text-xs mt-1.5">
                 NEU · Tap to Enter or Exit
               </p>
             </div>
-            {/* White body — solid */}
             <div className="bg-white px-8 py-7 space-y-5">
+
+              {/* ── Library closed banner ── */}
+              {isLibraryClosed && (
+                <div className="px-4 py-3.5 rounded-2xl flex items-start gap-3 mb-1"
+                  style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                  <span className="text-xl flex-shrink-0">🔒</span>
+                  <div>
+                    <p className="font-bold text-sm" style={{ color: '#dc2626' }}>
+                      {branchName ?? 'Library'} is currently closed
+                    </p>
+                    {libraryHours?.openTime && libraryHours?.closeTime && (
+                      <p className="text-xs font-medium mt-0.5" style={{ color: '#ef4444' }}>
+                        {libraryHours.reason === 'not_yet_open'
+                          ? `Opens today at ${libraryHours.openTime}`
+                          : `Hours: ${libraryHours.openTime} – ${libraryHours.closeTime}`}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Announcement banner ── */}
+              <KioskAnnouncementBanner branchId={kioskBranchId ?? undefined} />
+
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="uppercase font-bold text-xs tracking-widest text-slate-400">Institutional ID</span>
@@ -502,9 +752,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   <Input ref={inputRef} placeholder="XX-YYYYY-ZZZ"
                     value={rfidInput}
                     onChange={e => {
-                      // Strip non-digits from whatever the browser gives us,
-                      // then rebuild the formatted string from scratch every time.
-                      // This prevents double-digit bugs from composition events.
                       const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
                       let out = digits;
                       if (digits.length > 2) out = digits.slice(0,2) + '-' + digits.slice(2);
@@ -512,14 +759,15 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                       setRfidInput(out);
                     }}
                     className="h-14 text-lg font-mono text-center font-bold rounded-2xl border-2 border-slate-200 bg-slate-50 focus:bg-white focus:border-primary/40 pl-10 tracking-widest"
+                    disabled={isLibraryClosed}
                     onKeyDown={e => e.key === 'Enter' && handleIdentify(rfidInput)}
                     inputMode="numeric" autoComplete="off" autoCorrect="off" spellCheck={false} />
                 </div>
               </div>
               <Button onClick={() => handleIdentify(rfidInput)}
                 className="w-full h-13 py-3.5 text-base font-bold rounded-2xl shadow-lg transition-all"
-                style={{ background: 'linear-gradient(135deg,hsl(43,85%,50%),hsl(38,90%,42%))' }}
-                disabled={isSearching || !rfidInput.trim()}>
+                style={{ background: isLibraryClosed ? '#94a3b8' : 'linear-gradient(135deg,hsl(43,85%,50%),hsl(38,90%,42%))' }}
+                disabled={isSearching || !rfidInput.trim() || isLibraryClosed}>
                 {isSearching ? <Loader2 className="animate-spin mr-2" size={18} /> : null}
                 {isSearching ? 'Searching…' : 'Verify Identity'}
               </Button>
@@ -529,7 +777,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   <span className="bg-white px-4 text-slate-300">Cloud Enrollment</span>
                 </div>
               </div>
-              <Button variant="outline" onClick={handleGoogleLogin} disabled={isSearching}
+              <Button variant="outline" onClick={handleGoogleLogin} disabled={isSearching || isLibraryClosed}
                 className="w-full h-12 text-sm font-semibold rounded-2xl border-2 hover:bg-slate-50 transition-all"
                 style={{ borderColor: 'hsl(221,72%,22%)', color: 'hsl(221,72%,22%)' }}>
                 <div className="flex items-center gap-3">
@@ -541,14 +789,17 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </div>
         )}
 
-        {/* ── DEPT/PROGRAM (visitors only) ── */}
+        {/* ── DEPT/PROGRAM ── */}
         {step === 'dept' && identifiedStudent && (
           <Card className="rounded-[2.5rem] shadow-2xl p-10 space-y-6 animate-in slide-in-from-bottom-4 duration-500"
             style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}>
             <div className="text-center space-y-3">
-              <div className="mx-auto w-16 h-16 rounded-2xl flex items-center justify-center text-white font-bold text-2xl shadow-lg"
-                style={{ background: 'linear-gradient(135deg,hsl(43,85%,50%),hsl(38,90%,40%))' }}>
-                {(identifiedStudent.firstName || 'V')[0]}
+              <div className="flex justify-center">
+                <KioskAvatar
+                  name={identifiedStudent.firstName || 'V'}
+                  avatarUrl={(identifiedStudent as any).avatarUrl}
+                  size={64} rounded="1rem"
+                />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
@@ -617,14 +868,73 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </Card>
         )}
 
-        {/* ── PURPOSE — now a dropdown ── */}
-        {step === 'purpose' && identifiedStudent && (
+        {/* ── PURPOSE ── */}
+        {step === 'purpose' && identifiedStudent && isLibraryClosed ? (
+          /* ── Library closed — show card instead of purpose picker ── */
+          <div className="rounded-[2rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom-4 duration-400"
+            style={{ background: 'linear-gradient(160deg,hsl(225,70%,42%) 0%,hsl(221,72%,22%) 100%)' }}>
+            <div className="px-8 pt-8 pb-6 text-center space-y-3">
+              <div className="flex justify-center">
+                <KioskAvatar
+                  name={`${identifiedStudent.firstName} ${identifiedStudent.lastName}`}
+                  avatarUrl={(identifiedStudent as any).avatarUrl}
+                  size={72} rounded="1.1rem"
+                />
+              </div>
+              <div>
+                <h2 className="text-2xl font-extrabold text-white" style={{ fontFamily: "'Playfair Display',serif" }}>
+                  Sorry, {identifiedStudent.firstName}!
+                </h2>
+                <p className="text-white/70 text-sm font-semibold mt-1">
+                  {branchName ?? 'The library'} is currently closed.
+                </p>
+                {libraryHours?.reason === 'not_yet_open' && libraryHours.openTime ? (
+                  <p className="text-white/50 text-xs font-bold mt-1 uppercase tracking-widest">
+                    Opens today at {libraryHours.openTime}
+                  </p>
+                ) : libraryHours?.closeTime ? (
+                  <p className="text-white/50 text-xs font-bold mt-1 uppercase tracking-widest">
+                    Operating hours: {libraryHours.openTime} – {libraryHours.closeTime}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <div className="bg-white rounded-t-3xl px-8 pt-7 pb-8">
+              <div className="text-center space-y-4">
+                <div className="text-5xl">🔒</div>
+                <div>
+                  <p className="font-bold text-slate-900 text-lg" style={{ fontFamily: "'Playfair Display',serif" }}>
+                    {branchName ?? 'Library'} is Closed
+                  </p>
+                  <p className="text-slate-500 text-sm font-medium mt-1 leading-relaxed">
+                    {libraryHours?.reason === 'not_yet_open'
+                      ? `Please come back when we open at ${libraryHours.openTime}.`
+                      : `We're closed for today. Please visit us during operating hours.`}
+                  </p>
+                  {libraryHours?.openTime && libraryHours?.closeTime && (
+                    <p className="text-xs font-bold text-slate-400 mt-2 uppercase tracking-widest">
+                      {libraryHours.openTime} – {libraryHours.closeTime} · {['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date().getDay()]}
+                    </p>
+                  )}
+                </div>
+                <button onClick={handleReset}
+                  className="w-full h-12 rounded-2xl font-bold text-sm text-white transition-all active:scale-95"
+                  style={{ background: 'linear-gradient(135deg,hsl(221,72%,22%),hsl(221,60%,32%))' }}>
+                  ← Back
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : step === 'purpose' && identifiedStudent && (
           <div className="rounded-[2rem] overflow-hidden shadow-2xl animate-in slide-in-from-bottom-4 duration-400"
             style={{ background: 'linear-gradient(160deg,hsl(225,70%,42%) 0%,hsl(221,72%,22%) 100%)' }}>
             <div className="px-8 pt-8 pb-6 text-center">
-              <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-extrabold text-white mx-auto mb-4"
-                style={{ background: 'linear-gradient(135deg,hsl(43,85%,55%),hsl(38,90%,44%))' }}>
-                {(identifiedStudent.firstName || 'V')[0]}
+              <div className="flex justify-center mb-4">
+                <KioskAvatar
+                  name={`${identifiedStudent.firstName} ${identifiedStudent.lastName}`}
+                  avatarUrl={(identifiedStudent as any).avatarUrl}
+                  size={72} rounded="1.1rem"
+                />
               </div>
               <h2 className="text-2xl font-extrabold text-white" style={{ fontFamily: "'Playfair Display',serif" }}>
                 Welcome, {identifiedStudent.firstName} {identifiedStudent.lastName}!
@@ -648,8 +958,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-widest text-center">
                   Select Purpose of Visit
                 </p>
-
-                {/* FIX: Dropdown instead of grid buttons for data consistency */}
                 <Select value={purpose} onValueChange={setPurpose}>
                   <SelectTrigger className="h-14 rounded-2xl border-2 bg-slate-50 font-semibold text-base"
                     style={{ borderColor: purpose ? navy : '#e2e8f0' }}>
@@ -657,8 +965,7 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   </SelectTrigger>
                   <SelectContent className="rounded-xl max-h-72">
                     {purposes.map(p => (
-                      <SelectItem key={p.value} value={p.value}
-                        className="font-semibold text-sm py-3 cursor-pointer">
+                      <SelectItem key={p.value} value={p.value} className="font-semibold text-sm py-3 cursor-pointer">
                         {p.label}
                       </SelectItem>
                     ))}
@@ -691,7 +998,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           const prog        = identifiedStudent.program || '';
           const isCheckIn   = lastAction === 'checkin';
 
-          // Build duration string for tap-out
           const durStr = (() => {
             if (!sessionDuration) return null;
             const { hours, minutes } = sessionDuration;
@@ -706,11 +1012,29 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
               style={{ background: 'linear-gradient(160deg,hsl(225,70%,38%) 0%,hsl(221,72%,22%) 100%)' }}>
 
               <div className="px-8 pt-10 pb-4 text-center space-y-3">
-                <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
-                  style={{ background: 'rgba(255,255,255,0.15)' }}>
-                  {isCheckIn
-                    ? <CheckCircle2 size={34} className="text-white" />
-                    : <LogOut       size={34} className="text-white" />}
+                <div className="flex justify-center">
+                  {(identifiedStudent as any).avatarUrl ? (
+                    <div className="relative">
+                      <KioskAvatar
+                        name={`${identifiedStudent.firstName} ${identifiedStudent.lastName}`}
+                        avatarUrl={(identifiedStudent as any).avatarUrl}
+                        size={72} rounded="1.1rem"
+                      />
+                      <div className="absolute -bottom-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center"
+                        style={{ background: isCheckIn ? '#059669' : '#64748b', border: '2px solid white' }}>
+                        {isCheckIn
+                          ? <CheckCircle2 size={16} className="text-white" />
+                          : <LogOut size={16} className="text-white" />}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
+                      style={{ background: 'rgba(255,255,255,0.15)' }}>
+                      {isCheckIn
+                        ? <CheckCircle2 size={34} className="text-white" />
+                        : <LogOut       size={34} className="text-white" />}
+                    </div>
+                  )}
                 </div>
                 <p className="text-white/50 text-xs font-bold uppercase tracking-widest pt-1">
                   {isCheckIn ? 'Check-In Logged' : 'Check-Out Logged'}
@@ -736,7 +1060,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   </p>
                 ) : (
                   <div className="space-y-3">
-                    {/* Duration pill */}
                     {durStr && (
                       <div className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl"
                         style={{ background: 'rgba(255,255,255,0.14)' }}>
@@ -747,7 +1070,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                         <span className="text-white/60 text-sm font-medium">inside</span>
                       </div>
                     )}
-                    {/* Farewell message */}
                     <p className="text-white/85 text-base font-medium leading-relaxed">
                       Thank You <strong className="text-white">{fullName}</strong> for visiting NEU Library.{' '}
                       {durStr && (
@@ -758,7 +1080,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   </div>
                 )}
 
-                {/* Countdown */}
                 <div className="flex items-center justify-center gap-2 text-white/50 text-sm font-semibold">
                   <span>Returning in</span>
                   <span className="text-white font-extrabold text-xl w-7 text-center"
@@ -792,7 +1113,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                     Hi! <strong>{blockedStudent.name}</strong>, you're prohibited from entering the library.
                     Please contact the admin.
                   </p>
-                  {/* Countdown bar */}
                   <div className="mt-2">
                     <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <div className="h-full bg-red-400 rounded-full transition-all duration-1000"
@@ -807,21 +1127,18 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   <button
                     onClick={() => {
                       setBlockedStudent(null);
-                      // Pre-fill user info for the contact modal
                       if (identifiedStudent) {
                         setContactAdminUser(identifiedStudent);
                         setShowContactAdmin(true);
                       }
                     }}
                     className="w-full h-12 rounded-2xl font-bold text-sm text-white transition-all"
-                    style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}
-                  >
+                    style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}>
                     Contact Admin
                   </button>
                   <button
                     onClick={() => setBlockedStudent(null)}
-                    className="w-full h-12 rounded-2xl font-bold text-sm text-slate-600 border border-slate-200 hover:bg-slate-50"
-                  >
+                    className="w-full h-12 rounded-2xl font-bold text-sm text-slate-600 border border-slate-200 hover:bg-slate-50">
                     Understood
                   </button>
                 </div>
@@ -831,13 +1148,11 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </div>
         )}
 
-
-        {/* ── BLOCKED INSIDE MODAL — persistent, no auto-dismiss ── */}
+        {/* ── BLOCKED INSIDE MODAL ── */}
         {blockedInsideModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
             style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(12px)', animation: 'fadeIn 0.2s ease-out' }}>
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in duration-300">
-              {/* Red header band */}
               <div className="h-2 w-full" style={{ background: 'linear-gradient(90deg,#dc2626,#ef4444)' }} />
               <div className="px-7 py-7 text-center space-y-4">
                 <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
@@ -859,7 +1174,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                   <p className="text-xs font-bold text-red-700 uppercase tracking-wide">Action Required</p>
                   <p className="text-xs text-red-600 mt-1">Contact the Library Admin to resolve your account status.</p>
                 </div>
-                {/* No dismiss button — admin must intervene. Only "Understood" after reading. */}
                 <button
                   onClick={() => { setBlockedInsideModal(false); handleReset(); }}
                   className="w-full h-12 rounded-2xl font-bold text-sm text-white transition-all active:scale-95"
@@ -877,14 +1191,10 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
             style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(10px)', animation: 'fadeIn 0.2s ease-out' }}>
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in duration-300">
               <div className="px-8 pt-8 pb-7 text-center space-y-5">
-
-                {/* Icon */}
                 <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto"
                   style={{ background: 'rgba(251,191,36,0.12)' }}>
                   <GraduationCap size={32} style={{ color: 'hsl(43,85%,42%)' }} />
                 </div>
-
-                {/* Text */}
                 <div className="space-y-2">
                   <h3 className="text-xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
                     Not Yet Registered
@@ -894,8 +1204,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                     <strong className="text-slate-800">Institutional Account</strong> to continue.
                   </p>
                 </div>
-
-                {/* Primary action — triggers OAuth then auto-redirects to registration */}
                 <button
                   onClick={handleRegisterFromPopup}
                   disabled={isRegisteringFromPopup}
@@ -906,8 +1214,6 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                     : <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />}
                   {isRegisteringFromPopup ? 'Opening Google…' : 'Register with Google'}
                 </button>
-
-                {/* Dismiss */}
                 <button
                   onClick={() => setShowNotRegistered(false)}
                   className="w-full text-xs font-semibold text-slate-400 hover:text-slate-600 transition-colors py-1">
@@ -919,7 +1225,35 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
           </div>
         )}
 
-        {/* ── CredentialRequestModal for blocked users ── */}
+        {/* ── Library Closed Modal ── */}
+        {closedMsg && (
+          <div className="fixed inset-0 z-[300] flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(12px)' }}>
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+              <div className="px-7 pt-8 pb-6 text-center space-y-4">
+                <div className="text-5xl">🔒</div>
+                <div className="space-y-2">
+                  <h3 className="text-xl font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
+                    {branchName ?? 'Library'} is Closed
+                  </h3>
+                  <p className="text-slate-600 text-sm font-medium leading-relaxed">{closedMsg}</p>
+                  {libraryHours?.openTime && libraryHours?.closeTime && (
+                    <p className="text-xs font-semibold text-slate-400">
+                      Operating hours: {libraryHours.openTime} – {libraryHours.closeTime}
+                    </p>
+                  )}
+                </div>
+                <button onClick={() => setClosedMsg(null)}
+                  className="w-full h-12 rounded-2xl font-bold text-sm text-white transition-all active:scale-95"
+                  style={{ background: 'linear-gradient(135deg,hsl(221,72%,22%),hsl(221,60%,32%))' }}>
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── CredentialRequestModal ── */}
         {showContactAdmin && contactAdminUser && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
             style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}>

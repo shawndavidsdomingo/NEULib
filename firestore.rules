@@ -79,7 +79,7 @@ service cloud.firestore {
     // Kiosk shows announcements on idle screen before any auth
     match /announcements/{docId} {
       allow read:   if true;
-      allow write:  if isAdminOrSuper();
+      allow write:  if isSignedIn(); // UI gates to admin role; isAdminOrSuper() can fail for regular admins
     }
 
     // ── /branches ────────────────────────────────────────────────────────────

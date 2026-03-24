@@ -68,6 +68,7 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
   const [newType,   setNewType]   = useState<'info'|'warning'|'alert'>('info');
   const [newStart,  setNewStart]  = useState(format(new Date(), 'yyyy-MM-dd'));
   const [newEnd,    setNewEnd]    = useState('');
+  const [newBranch, setNewBranch] = useState(''); // '' = all branches
 
   // ── Image state ───────────────────────────────────────────────────────────
   type ImageMode = 'upload' | 'url';
@@ -81,7 +82,13 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
   // ── Modal state ───────────────────────────────────────────────────────────
   const [previewAnn, setPreviewAnn] = useState<AnnouncementRecord | null>(null);
 
-  const annRef = useMemoFirebase(() => collection(db, 'announcements'), [db]);
+  const annRef     = useMemoFirebase(() => collection(db, 'announcements'), [db]);
+  const branchesRef= useMemoFirebase(() => collection(db, 'branches'), [db]);
+  const { data: branches } = useCollection<{ id: string; name: string }>(branchesRef);
+  const branchNameMap = useMemo(
+    () => Object.fromEntries((branches || []).map(b => [b.id, b.name])),
+    [branches]
+  );
   const { data: announcements, isLoading } = useCollection<AnnouncementRecord>(annRef);
 
   const now = new Date();
@@ -183,6 +190,7 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
         createdBy: user?.email || '',
         createdAt: new Date().toISOString(),
         isActive:  true,
+        ...(newBranch ? { branchId: newBranch } : {}),
       };
       if (imageUrl)  data.imageUrl  = imageUrl;
       if (imagePath) data.imagePath = imagePath;
@@ -357,15 +365,13 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               <p className="text-slate-400 text-sm mt-0.5">Notices and event posters displayed on the kiosk</p>
             </div>
           </div>
-          {isSuperAdmin && (
-            <button onClick={() => setAdding(a => !a)}
+          <button onClick={() => setAdding(a => !a)}
               className="flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-bold border transition-all active:scale-95"
               style={adding
                 ? { background: 'rgba(239,68,68,0.07)', color: '#dc2626', borderColor: 'rgba(239,68,68,0.2)' }
                 : { background: `${navy}0d`, color: navy, borderColor: `${navy}20` }}>
               {adding ? <><X size={13} /> Cancel</> : <><Plus size={13} /> New Announcement</>}
             </button>
-          )}
         </div>
 
         {/* Form */}
@@ -410,6 +416,31 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               </div>
             </div>
 
+            {/* Branch selector */}
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Visible on branch (optional)</p>
+              <select value={newBranch} onChange={e => setNewBranch(e.target.value)}
+                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none"
+                style={{ fontFamily: "'DM Sans',sans-serif" }}>
+                <option value="">All Branches</option>
+                {(branches || []).map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-400 mt-1 font-medium">Leave blank to show on all kiosks</p>
+            </div>
+
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Visible on branch</p>
+              <select value={newBranch} onChange={e => setNewBranch(e.target.value)}
+                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none">
+                <option value="">🌐 All Branches</option>
+                {(branches || []).map(b => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-400 mt-1">Leave blank to show on all kiosks</p>
+            </div>
             <div className="flex justify-end">
               <button onClick={handleAdd} disabled={saving}
                 className="flex items-center gap-2 h-9 px-4 rounded-xl font-bold text-sm text-white transition-all active:scale-95 disabled:opacity-60"
@@ -423,8 +454,8 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
           </div>
         )}
 
-        {/* List */}
-        <div className="p-5 space-y-3">
+        {/* List — card grid */}
+        <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
           {isLoading ? (
             <div className="py-8 flex items-center justify-center gap-3 text-slate-400">
               <Loader2 className="animate-spin" size={16} />
@@ -494,12 +525,21 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
                       {a.body && (
                         <p className="text-xs text-slate-500 font-medium leading-relaxed line-clamp-2">{a.body}</p>
                       )}
-                      <p className="text-xs text-slate-400 font-medium">
-                        {format(parseISO(a.startAt), 'MMM d')} — {format(parseISO(a.endAt), 'MMM d, yyyy')}
-                      </p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-xs text-slate-400 font-medium">
+                          {format(parseISO(a.startAt), 'MMM d')} — {format(parseISO(a.endAt), 'MMM d, yyyy')}
+                        </p>
+                        {(a as any).branchId ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                            style={{ background: 'rgba(5,150,105,0.08)', color: '#059669' }}>
+                            {branchNameMap[(a as any).branchId] ?? (a as any).branchId}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-slate-300">All Branches</span>
+                        )}
+                      </div>
                     </div>
-                    {isSuperAdmin && (
-                      <div className="flex items-center gap-1 flex-shrink-0">
+                    <div className="flex items-center gap-1 flex-shrink-0">
                         <button onClick={() => setPreviewAnn(a)}
                           title="Preview on kiosk"
                           className="p-2 rounded-xl text-slate-400 hover:bg-slate-100 transition-all">
@@ -516,7 +556,6 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
                           <Trash2 size={14} />
                         </button>
                       </div>
-                    )}
                   </div>
                 </div>
               );

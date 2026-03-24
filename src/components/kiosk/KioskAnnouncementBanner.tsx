@@ -4,7 +4,7 @@ import { useMemo, useEffect, useState } from 'react';
 import { useFirestore, useCollection, useMemoFirebase, useUser } from '@/firebase';
 import { collection } from 'firebase/firestore';
 import { isAfter, isBefore, parseISO } from 'date-fns';
-import { Info, AlertTriangle } from 'lucide-react';
+import { Info, AlertTriangle, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { AnnouncementRecord } from '@/components/admin/KioskAnnouncements';
 
 const ICON_MAP = {
@@ -55,9 +55,12 @@ export function KioskAnnouncementBanner({ branchId }: Props) {
 
   useEffect(() => {
     if (active.length <= 1) { setIdx(0); return; }
-    const t = setInterval(() => setIdx(i => (i + 1) % active.length), 6000);
+    const t = setInterval(() => setIdx(i => (i + 1) % active.length), 5000);
     return () => clearInterval(t);
   }, [active.length]);
+
+  const goPrev = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i - 1 + active.length) % active.length); };
+  const goNext = (e: React.MouseEvent) => { e.stopPropagation(); setIdx(i => (i + 1) % active.length); };
 
   if (!active.length) return null;
 
@@ -103,17 +106,25 @@ export function KioskAnnouncementBanner({ branchId }: Props) {
               </p>
             )}
           </div>
-          {/* Dots for multiple */}
+          {/* Navigation dots + prev/next */}
           {active.length > 1 && (
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0, paddingTop: 3 }}>
-              {active.map((_, i) => (
-                <div key={i} onClick={() => setIdx(i)}
-                  style={{
-                    width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
-                    background: meta.icon, opacity: i === idx ? 1 : 0.3,
-                    transition: 'all 0.3s ease', cursor: 'pointer',
-                  }} />
-              ))}
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+              <button onClick={goPrev}
+                style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
+                <ChevronLeft size={14} />
+              </button>
+              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                {active.map((_, i) => (
+                  <div key={i} onClick={() => setIdx(i)}
+                    style={{ width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
+                      background: meta.icon, opacity: i === idx ? 1 : 0.3,
+                      transition: 'all 0.3s ease', cursor: 'pointer' }} />
+                ))}
+              </div>
+              <button onClick={goNext}
+                style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
+                <ChevronRight size={14} />
+              </button>
             </div>
           )}
         </div>
@@ -147,15 +158,23 @@ export function KioskAnnouncementBanner({ branchId }: Props) {
         )}
       </div>
       {active.length > 1 && (
-        <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexShrink: 0, paddingTop: 3 }}>
-          {active.map((_, i) => (
-            <div key={i} onClick={() => setIdx(i)}
-              style={{
-                width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
-                background: meta.icon, opacity: i === idx ? 1 : 0.3,
-                transition: 'all 0.3s ease', cursor: 'pointer',
-              }} />
-          ))}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+          <button onClick={goPrev}
+            style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
+            <ChevronLeft size={14} />
+          </button>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            {active.map((_, i) => (
+              <div key={i} onClick={() => setIdx(i)}
+                style={{ width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
+                  background: meta.icon, opacity: i === idx ? 1 : 0.3,
+                  transition: 'all 0.3s ease', cursor: 'pointer' }} />
+            ))}
+          </div>
+          <button onClick={goNext}
+            style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
+            <ChevronRight size={14} />
+          </button>
         </div>
       )}
     </div>

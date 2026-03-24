@@ -4,7 +4,7 @@ import { useState, useMemo, useRef } from 'react';
 import {
   Megaphone, Plus, Trash2, Eye, EyeOff, X, Check,
   Loader2, AlertTriangle, Info, ImageIcon, ExternalLink,
-  Upload, Link as LinkIcon,
+  Upload, Link as LinkIcon, Pencil,
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useFirestore, useCollection, useMemoFirebase, useUser } from '@/firebase';
@@ -18,8 +18,8 @@ export interface AnnouncementRecord {
   title:       string;
   body:        string;
   type:        'info' | 'warning' | 'alert';
-  imageUrl?:   string;      // final URL (uploaded or pasted)
-  imagePath?:  string;      // Firebase Storage path — used for deletion
+  imageUrl?:   string;
+  imagePath?:  string;
   branchId?:   string;
   startAt:     string;
   endAt:       string;
@@ -44,13 +44,21 @@ const TYPE_META = {
 };
 
 const STATUS_STYLE: Record<string, { bg: string; color: string; label: string }> = {
-  live:      { bg: 'rgba(5,150,105,0.1)',  color: '#059669', label: 'Live on kiosk' },
-  scheduled: { bg: `${navy}0d`,             color: navy,       label: 'Scheduled'     },
-  expired:   { bg: 'rgba(100,116,139,0.1)', color: '#64748b', label: 'Expired'        },
-  inactive:  { bg: 'rgba(239,68,68,0.08)', color: '#dc2626', label: 'Hidden'         },
+  live:      { bg: 'rgba(5,150,105,0.1)',  color: '#059669', label: 'Live on Kiosk' },
+  scheduled: { bg: `${navy}0d`,             color: navy,       label: 'Scheduled'    },
+  expired:   { bg: 'rgba(100,116,139,0.1)', color: '#64748b', label: 'Expired'       },
+  inactive:  { bg: 'rgba(239,68,68,0.08)', color: '#dc2626', label: 'Hidden'        },
 };
 
 const MAX_MB = MAX_IMAGE_BYTES / 1024 / 1024;
+const TITLE_MAX = 80;
+
+// ── Empty form state factory ──────────────────────────────────────────────────
+const emptyForm = () => ({
+  title: '', body: '', type: 'info' as 'info' | 'warning' | 'alert',
+  start: format(new Date(), 'yyyy-MM-dd'), end: '', branch: '',
+  imageMode: 'upload' as 'upload' | 'url', urlInput: '',
+});
 
 interface Props { isSuperAdmin: boolean; }
 
@@ -61,29 +69,29 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Form state ────────────────────────────────────────────────────────────
-  const [adding,    setAdding]    = useState(false);
-  const [saving,    setSaving]    = useState(false);
-  const [newTitle,  setNewTitle]  = useState('');
-  const [newBody,   setNewBody]   = useState('');
-  const [newType,   setNewType]   = useState<'info'|'warning'|'alert'>('info');
-  const [newStart,  setNewStart]  = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [newEnd,    setNewEnd]    = useState('');
-  const [newBranch, setNewBranch] = useState(''); // '' = all branches
+  const [formOpen,   setFormOpen]   = useState(false);
+  const [editingId,  setEditingId]  = useState<string | null>(null); // null = new
+  const [saving,     setSaving]     = useState(false);
+  const [form,       setForm]       = useState(emptyForm());
+
+  const patchForm = (patch: Partial<typeof form>) => setForm(f => ({ ...f, ...patch }));
 
   // ── Image state ───────────────────────────────────────────────────────────
-  type ImageMode = 'upload' | 'url';
-  const [imageMode,      setImageMode]      = useState<ImageMode>('upload');
-  const [urlInput,       setUrlInput]       = useState('');
-  const [urlError,       setUrlError]       = useState(false);
   const [uploadFile,     setUploadFile]     = useState<File | null>(null);
   const [uploadPreview,  setUploadPreview]  = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [urlError,       setUrlError]       = useState(false);
 
-  // ── Modal state ───────────────────────────────────────────────────────────
-  const [previewAnn, setPreviewAnn] = useState<AnnouncementRecord | null>(null);
+  // ── Existing image when editing ───────────────────────────────────────────
+  const [existingImageUrl, setExistingImageUrl] = useState<string | undefined>(undefined);
+  const [keepExisting,     setKeepExisting]     = useState(true);
 
-  const annRef     = useMemoFirebase(() => collection(db, 'announcements'), [db]);
-  const branchesRef= useMemoFirebase(() => collection(db, 'branches'), [db]);
+  // ── Modal/confirmation state ──────────────────────────────────────────────
+  const [previewAnn,      setPreviewAnn]      = useState<AnnouncementRecord | null>(null);
+  const [confirmDelete,   setConfirmDelete]   = useState<AnnouncementRecord | null>(null);
+
+  const annRef      = useMemoFirebase(() => collection(db, 'announcements'), [db]);
+  const branchesRef = useMemoFirebase(() => collection(db, 'branches'), [db]);
   const { data: branches } = useCollection<{ id: string; name: string }>(branchesRef);
   const branchNameMap = useMemo(
     () => Object.fromEntries((branches || []).map(b => [b.id, b.name])),
@@ -105,6 +113,44 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
     return 'live';
   };
 
+  // ── Open form for new announcement ───────────────────────────────────────
+  const openNew = () => {
+    setEditingId(null);
+    setForm(emptyForm());
+    clearFile();
+    setExistingImageUrl(undefined);
+    setKeepExisting(true);
+    setFormOpen(true);
+  };
+
+  // ── Open form pre-filled for editing ──────────────────────────────────────
+  const openEdit = (a: AnnouncementRecord) => {
+    setEditingId(a.id);
+    setForm({
+      title:     a.title,
+      body:      a.body,
+      type:      a.type,
+      start:     format(parseISO(a.startAt), 'yyyy-MM-dd'),
+      end:       format(parseISO(a.endAt),   'yyyy-MM-dd'),
+      branch:    (a as any).branchId || '',
+      imageMode: 'upload',
+      urlInput:  '',
+    });
+    clearFile();
+    setExistingImageUrl(a.imageUrl);
+    setKeepExisting(true);
+    setFormOpen(true);
+  };
+
+  const closeForm = () => {
+    setFormOpen(false);
+    setEditingId(null);
+    setForm(emptyForm());
+    clearFile();
+    setExistingImageUrl(undefined);
+    setKeepExisting(true);
+  };
+
   // ── File picker ───────────────────────────────────────────────────────────
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -114,6 +160,7 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
     setUploadFile(file);
     setUploadProgress(null);
     setUploadPreview(URL.createObjectURL(file));
+    setKeepExisting(false); // new file replaces existing
   };
 
   const clearFile = () => {
@@ -124,21 +171,20 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // ── Upload to Firebase Storage ────────────────────────────────────────────
+  // ── Upload to Cloudinary ──────────────────────────────────────────────────
   const uploadImage = async (file: File): Promise<{ url: string; path: string }> => {
-    // Read env vars at call time (not module load time) to ensure they're available
-    // Read at call time; fall back to known values from .env.local
     const cloudName    = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME    || 'dvaz64wcw';
     const uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || 'neu-library';
-
     return new Promise((resolve, reject) => {
-      const form = new FormData();
-      form.append('file', file);
-      form.append('upload_preset', uploadPreset);
-      form.append('folder', 'neu-library/announcements');
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('upload_preset', uploadPreset);
+      formData.append('folder', 'neu-library/announcements');
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`);
-      xhr.upload.onprogress = e => { if (e.lengthComputable) setUploadProgress(Math.round((e.loaded/e.total)*100)); };
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) setUploadProgress(Math.round((e.loaded / e.total) * 100));
+      };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           const data = JSON.parse(xhr.responseText);
@@ -147,63 +193,74 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
           try {
             const errData = JSON.parse(xhr.responseText);
             const msg = errData?.error?.message || 'Upload failed';
-            // Common Cloudinary errors with friendly guidance
             if (msg.includes('Upload preset') || msg.includes('upload_preset')) {
-              reject(new Error(`Upload preset "${uploadPreset}" not found or not set to Unsigned. Go to Cloudinary → Settings → Upload → Upload presets and set signing mode to Unsigned.`));
-            } else if (xhr.status === 401 || xhr.status === 403) {
-              reject(new Error(`Cloudinary rejected the upload. Make sure the preset "${uploadPreset}" exists and is set to Unsigned mode.`));
+              reject(new Error(`Upload preset "${uploadPreset}" not found. Set signing mode to Unsigned in Cloudinary.`));
             } else {
               reject(new Error(msg));
             }
           } catch {
-            reject(new Error(`Upload failed (HTTP ${xhr.status}). Check Cloudinary preset settings.`));
+            reject(new Error(`Upload failed (HTTP ${xhr.status})`));
           }
         }
       };
       xhr.onerror = () => reject(new Error('Network error during upload'));
-      xhr.send(form);
+      xhr.send(formData);
     });
   };
 
-  // ── Publish ───────────────────────────────────────────────────────────────
-  const handleAdd = async () => {
-    if (!newTitle.trim()) { toast({ title: 'Title is required', variant: 'destructive' }); return; }
-    if (!newEnd)          { toast({ title: 'End date is required', variant: 'destructive' }); return; }
+  // ── Save (create or update) ───────────────────────────────────────────────
+  const handleSave = async () => {
+    if (!form.title.trim()) { toast({ title: 'Title is required', variant: 'destructive' }); return; }
+    if (!form.end)          { toast({ title: 'End date is required', variant: 'destructive' }); return; }
     setSaving(true);
     try {
-      const id = `ann_${Date.now()}`;
       let imageUrl: string | undefined;
       let imagePath: string | undefined;
 
-      if (imageMode === 'upload' && uploadFile) {
+      if (form.imageMode === 'upload' && uploadFile) {
+        // New file uploaded
         const r = await uploadImage(uploadFile);
         imageUrl  = r.url;
         imagePath = r.path;
-      } else if (imageMode === 'url' && urlInput.trim()) {
-        imageUrl = urlInput.trim();
+      } else if (form.imageMode === 'url' && form.urlInput.trim()) {
+        imageUrl = form.urlInput.trim();
+      } else if (keepExisting && existingImageUrl) {
+        // Keep existing image unchanged when editing
+        imageUrl = existingImageUrl;
       }
 
       const data: Record<string, any> = {
-        id, title: newTitle.trim(), body: newBody.trim(), type: newType,
-        startAt:   new Date(newStart).toISOString(),
-        endAt:     new Date(newEnd + 'T23:59:59').toISOString(),
-        createdBy: user?.email || '',
-        createdAt: new Date().toISOString(),
+        title:     form.title.trim(),
+        body:      form.body.trim(),
+        type:      form.type,
+        startAt:   new Date(form.start).toISOString(),
+        endAt:     new Date(form.end + 'T23:59:59').toISOString(),
         isActive:  true,
-        ...(newBranch ? { branchId: newBranch } : {}),
+        ...(form.branch ? { branchId: form.branch } : { branchId: null }),
       };
       if (imageUrl)  data.imageUrl  = imageUrl;
+      else           data.imageUrl  = null;
       if (imagePath) data.imagePath = imagePath;
 
-      await setDoc(doc(db, 'announcements', id), data);
+      if (editingId) {
+        // Update existing document
+        await updateDoc(doc(db, 'announcements', editingId), data);
+        toast({ title: 'Announcement updated', description: 'Changes saved successfully.' });
+      } else {
+        // Create new document
+        const id = `ann_${Date.now()}`;
+        await setDoc(doc(db, 'announcements', id), {
+          ...data,
+          id,
+          createdBy: user?.email || '',
+          createdAt: new Date().toISOString(),
+        });
+        toast({ title: 'Announcement published', description: 'Will appear on the kiosk during the specified dates.' });
+      }
 
-      setAdding(false);
-      setNewTitle(''); setNewBody(''); setNewType('info'); setNewEnd('');
-      setUrlInput(''); setUrlError(false); clearFile();
-
-      toast({ title: 'Announcement published', description: 'Will appear on the kiosk during the specified dates.' });
+      closeForm();
     } catch (err: any) {
-      toast({ title: 'Failed to publish', description: err.message, variant: 'destructive' });
+      toast({ title: 'Failed to save', description: err.message, variant: 'destructive' });
     } finally {
       setSaving(false);
     }
@@ -214,11 +271,11 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
     toast({ title: a.isActive ? 'Announcement hidden' : 'Announcement shown' });
   };
 
-  const handleDelete = async (a: AnnouncementRecord) => {
-    await deleteDoc(doc(db, 'announcements', a.id));
-    // Note: Cloudinary images are not deleted automatically (requires server-side API key).
-    // Images will remain in your Cloudinary media library — you can delete them manually there.
+  const executeDelete = async () => {
+    if (!confirmDelete) return;
+    await deleteDoc(doc(db, 'announcements', confirmDelete.id));
     toast({ title: 'Announcement deleted' });
+    setConfirmDelete(null);
   };
 
   const inputDate = {
@@ -236,39 +293,61 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
         </p>
         <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-slate-100">
           {([
-            { id: 'upload' as const, icon: Upload,   label: 'Upload file' },
-            { id: 'url'    as const, icon: LinkIcon, label: 'Paste URL'   },
+            { id: 'upload' as const, icon: Upload,   label: 'Upload' },
+            { id: 'url'    as const, icon: LinkIcon, label: 'URL'    },
           ]).map(m => (
             <button key={m.id}
               onClick={() => {
-                if (m.id === imageMode) {
-                  // Already in this mode — for upload, trigger file picker directly
-                  if (m.id === 'upload') fileInputRef.current?.click();
-                  return;
-                }
-                setImageMode(m.id);
-                if (m.id === 'url') clearFile();        // switching to URL — clear any staged file
-                if (m.id === 'upload') { setUrlInput(''); setUrlError(false); }
+                patchForm({ imageMode: m.id });
+                if (m.id === 'url') clearFile();
+                if (m.id === 'upload') { patchForm({ urlInput: '' }); setUrlError(false); }
               }}
               className="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-bold transition-all"
-              style={imageMode === m.id ? { background: navy, color: 'white' } : { color: '#64748b' }}>
+              style={form.imageMode === m.id ? { background: navy, color: 'white' } : { color: '#64748b' }}>
               <m.icon size={11} /> {m.label}
             </button>
           ))}
         </div>
       </div>
 
-      {imageMode === 'upload' ? (
+      {/* If editing and no new file chosen, show keep/replace toggle */}
+      {editingId && existingImageUrl && !uploadFile && form.imageMode === 'upload' && (
+        <div className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 bg-slate-50">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-slate-600 mb-1">Current image</p>
+            <div style={{ aspectRatio: '16/9', overflow: 'hidden', borderRadius: 8, background: '#0f172a' }}>
+              <img src={existingImageUrl} alt="Current"
+                className="w-full h-full object-contain"
+                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 flex-shrink-0">
+            <button onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all"
+              style={{ background: `${navy}0d`, color: navy, borderColor: `${navy}20` }}>
+              <Upload size={11} /> Replace
+            </button>
+            <button onClick={() => { setExistingImageUrl(undefined); setKeepExisting(false); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border border-red-100 text-red-500 hover:bg-red-50 transition-all">
+              <X size={11} /> Remove
+            </button>
+          </div>
+        </div>
+      )}
+
+      {form.imageMode === 'upload' && (!editingId || !existingImageUrl || uploadFile) ? (
         uploadFile ? (
           <div className="rounded-xl border border-slate-200 overflow-hidden">
             {uploadPreview && (
-              <div className="relative" style={{ background: '#f8fafc' }}>
+              /* Fixed 16:9 aspect ratio preview */
+              <div className="relative" style={{ aspectRatio: '16/9', background: '#0f172a', overflow: 'hidden' }}>
                 <img src={uploadPreview} alt="Preview"
-                  className="w-full object-cover" style={{ maxHeight: 180 }} />
+                  className="w-full h-full object-contain" />
+                {/* Floating X with strong background */}
                 <button onClick={clearFile}
-                  className="absolute top-2 right-2 p-1.5 rounded-lg text-white"
-                  style={{ background: 'rgba(0,0,0,0.5)' }}>
-                  <X size={13} />
+                  className="absolute top-2 right-2 flex items-center justify-center w-8 h-8 rounded-full"
+                  style={{ background: 'rgba(0,0,0,0.65)', color: 'white' }}>
+                  <X size={14} />
                 </button>
               </div>
             )}
@@ -309,40 +388,38 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
             </div>
           </div>
         )
-      ) : (
+      ) : form.imageMode === 'url' ? (
         <div className="space-y-2">
           <div className="flex gap-2">
             <div className="relative flex-1">
               <LinkIcon size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <Input value={urlInput}
-                onChange={e => { setUrlInput(e.target.value); setUrlError(false); }}
+              <Input value={form.urlInput}
+                onChange={e => { patchForm({ urlInput: e.target.value }); setUrlError(false); }}
                 placeholder="https://i.imgur.com/… or any direct image link"
                 className="h-9 pl-8 rounded-xl border-slate-200 bg-white text-sm" />
             </div>
-            {urlInput.trim() && (
-              <a href={urlInput.trim()} target="_blank" rel="noreferrer"
+            {form.urlInput.trim() && (
+              <a href={form.urlInput.trim()} target="_blank" rel="noreferrer"
                 className="flex items-center gap-1 h-9 px-3 rounded-xl text-xs font-bold border border-slate-200 text-slate-500 hover:bg-slate-50 transition-all">
                 <ExternalLink size={12} /> Open
               </a>
             )}
           </div>
-          {urlInput.trim() && !urlError && (
-            <div className="rounded-xl overflow-hidden border border-slate-200" style={{ maxHeight: 160, background: '#f8fafc' }}>
-              <img src={urlInput.trim()} alt="Preview"
-                className="w-full object-cover" style={{ maxHeight: 160 }}
+          {form.urlInput.trim() && !urlError && (
+            <div className="rounded-xl overflow-hidden border border-slate-200"
+              style={{ aspectRatio: '16/9', background: '#0f172a' }}>
+              <img src={form.urlInput.trim()} alt="Preview"
+                className="w-full h-full object-contain"
                 onError={() => setUrlError(true)} />
             </div>
           )}
-          {urlInput.trim() && urlError && (
+          {form.urlInput.trim() && urlError && (
             <p className="text-xs font-semibold text-red-500 flex items-center gap-1">
               <AlertTriangle size={11} /> Could not load image — check the URL
             </p>
           )}
-          <p className="text-xs text-slate-400 font-medium">
-            Use a direct image URL ending in .jpg/.png/.webp. Imgur or Cloudinary work best.
-          </p>
         </div>
-      )}
+      ) : null}
 
       <input ref={fileInputRef} type="file" accept={ACCEPTED_IMAGE_TYPES} className="hidden" onChange={handleFileChange} />
     </div>
@@ -365,27 +442,44 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               <p className="text-slate-400 text-sm mt-0.5">Notices and event posters displayed on the kiosk</p>
             </div>
           </div>
-          <button onClick={() => setAdding(a => !a)}
+          {!formOpen && (
+            <button onClick={openNew}
               className="flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-bold border transition-all active:scale-95"
-              style={adding
-                ? { background: 'rgba(239,68,68,0.07)', color: '#dc2626', borderColor: 'rgba(239,68,68,0.2)' }
-                : { background: `${navy}0d`, color: navy, borderColor: `${navy}20` }}>
-              {adding ? <><X size={13} /> Cancel</> : <><Plus size={13} /> New Announcement</>}
+              style={{ background: `${navy}0d`, color: navy, borderColor: `${navy}20` }}>
+              <Plus size={13} /> New Announcement
             </button>
+          )}
         </div>
 
-        {/* Form */}
-        {adding && (
+        {/* Form (create or edit) */}
+        {formOpen && (
           <div className="px-5 py-5 border-b border-slate-100 space-y-4" style={{ background: 'rgba(10,26,77,0.02)' }}>
+            {/* Form heading */}
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-slate-700" style={{ fontFamily: "'Playfair Display',serif" }}>
+                {editingId ? '✏️ Edit Announcement' : '📣 New Announcement'}
+              </p>
+            </div>
+
+            {/* Title with character counter */}
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Title *</p>
-              <Input value={newTitle} onChange={e => setNewTitle(e.target.value)}
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide">Title *</p>
+                <span className="text-[10px] font-semibold"
+                  style={{ color: form.title.length > TITLE_MAX * 0.85 ? '#d97706' : '#94a3b8' }}>
+                  {form.title.length}/{TITLE_MAX}
+                </span>
+              </div>
+              <Input value={form.title}
+                onChange={e => patchForm({ title: e.target.value.slice(0, TITLE_MAX) })}
                 placeholder="e.g. Extended hours during exam week"
                 className="h-9 rounded-xl border-slate-200 bg-white text-sm" />
             </div>
+
+            {/* Body */}
             <div>
               <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Message (optional)</p>
-              <textarea value={newBody} onChange={e => setNewBody(e.target.value)} rows={2}
+              <textarea value={form.body} onChange={e => patchForm({ body: e.target.value })} rows={2}
                 placeholder="Additional details shown below the title on the kiosk…"
                 className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium resize-none outline-none focus:border-blue-400"
                 style={{ lineHeight: '1.6' }} />
@@ -397,10 +491,10 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               <div>
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Type</p>
                 <div className="flex items-center gap-1 p-1 rounded-xl bg-slate-100">
-                  {(['info','warning','alert'] as const).map(t => (
-                    <button key={t} onClick={() => setNewType(t)}
+                  {(['info', 'warning', 'alert'] as const).map(t => (
+                    <button key={t} onClick={() => patchForm({ type: t })}
                       className="flex-1 py-1 rounded-lg text-xs font-bold transition-all capitalize"
-                      style={newType === t ? { background: TYPE_META[t].color, color: 'white' } : { color: '#64748b' }}>
+                      style={form.type === t ? { background: TYPE_META[t].color, color: 'white' } : { color: '#64748b' }}>
                       {t}
                     </button>
                   ))}
@@ -408,61 +502,54 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               </div>
               <div>
                 <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Show from</p>
-                <input type="date" value={newStart} onChange={e => setNewStart(e.target.value)} style={inputDate} />
+                <input type="date" value={form.start} onChange={e => patchForm({ start: e.target.value })} style={inputDate} />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Show until</p>
-                <input type="date" value={newEnd} onChange={e => setNewEnd(e.target.value)} style={inputDate} />
+                <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Show until *</p>
+                <input type="date" value={form.end} onChange={e => patchForm({ end: e.target.value })} style={inputDate} />
               </div>
             </div>
 
-            {/* Branch selector */}
+            {/* Branch selector — single, no redundant duplicate */}
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Visible on branch (optional)</p>
-              <select value={newBranch} onChange={e => setNewBranch(e.target.value)}
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Visible on Branch</p>
+              <select value={form.branch} onChange={e => patchForm({ branch: e.target.value })}
                 className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none"
                 style={{ fontFamily: "'DM Sans',sans-serif" }}>
-                <option value="">All Branches</option>
-                {(branches || []).map(b => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-              <p className="text-xs text-slate-400 mt-1 font-medium">Leave blank to show on all kiosks</p>
-            </div>
-
-            <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-1.5">Visible on branch</p>
-              <select value={newBranch} onChange={e => setNewBranch(e.target.value)}
-                className="w-full h-9 px-3 rounded-xl border border-slate-200 bg-white text-sm font-medium outline-none">
                 <option value="">🌐 All Branches</option>
                 {(branches || []).map(b => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>
-              <p className="text-[11px] text-slate-400 mt-1">Leave blank to show on all kiosks</p>
             </div>
-            <div className="flex justify-end">
-              <button onClick={handleAdd} disabled={saving}
-                className="flex items-center gap-2 h-9 px-4 rounded-xl font-bold text-sm text-white transition-all active:scale-95 disabled:opacity-60"
-                style={{ background: '#059669' }}>
+
+            {/* Action buttons at bottom — Cancel beside Publish */}
+            <div className="flex items-center justify-end gap-3 pt-1">
+              <button onClick={closeForm}
+                className="h-9 px-5 rounded-xl font-bold text-sm border border-slate-200 text-slate-600 hover:bg-slate-50 transition-all active:scale-95">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={saving}
+                className="flex items-center gap-2 h-9 px-5 rounded-xl font-bold text-sm text-white transition-all active:scale-95 disabled:opacity-60"
+                style={{ background: editingId ? navy : '#059669' }}>
                 {saving
                   ? <><Loader2 size={13} className="animate-spin" />
-                      {uploadProgress !== null ? `Uploading ${uploadProgress}%…` : 'Publishing…'}</>
-                  : <><Check size={13} /> Publish</>}
+                      {uploadProgress !== null ? `Uploading ${uploadProgress}%…` : 'Saving…'}</>
+                  : <><Check size={13} /> {editingId ? 'Save Changes' : 'Publish'}</>}
               </button>
             </div>
           </div>
         )}
 
-        {/* List — card grid */}
+        {/* Gallery grid */}
         <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
           {isLoading ? (
-            <div className="py-8 flex items-center justify-center gap-3 text-slate-400">
+            <div className="col-span-2 py-8 flex items-center justify-center gap-3 text-slate-400">
               <Loader2 className="animate-spin" size={16} />
               <span className="text-sm font-medium">Loading…</span>
             </div>
           ) : !sorted.length ? (
-            <div className="py-8 text-center">
+            <div className="col-span-2 py-8 text-center">
               <Megaphone size={24} className="mx-auto text-slate-200 mb-2" />
               <p className="text-slate-400 text-sm font-medium">No announcements yet.</p>
             </div>
@@ -472,6 +559,8 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               const status = getStatus(a);
               const ss     = STATUS_STYLE[status] || STATUS_STYLE.inactive;
               const Icon   = meta.icon;
+              const isSpecificBranch = !!(a as any).branchId;
+
               return (
                 <div key={a.id}
                   className="rounded-2xl border overflow-hidden transition-all"
@@ -479,83 +568,104 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
                     borderColor: status === 'live' ? `${meta.color}30` : '#e2e8f0',
                     opacity: status === 'expired' || status === 'inactive' ? 0.65 : 1,
                   }}>
-                  {a.imageUrl && (
-                    <div className="relative" style={{ background: '#0f172a' }}>
+
+                  {/* Fixed 16:9 image area — always present for uniform card height */}
+                  <div className="relative" style={{ aspectRatio: '16/9', background: '#0f172a', overflow: 'hidden' }}>
+                    {a.imageUrl ? (
                       <img src={a.imageUrl} alt={a.title}
-                        className="w-full object-cover"
-                        style={{ maxHeight: 200, opacity: status === 'live' ? 1 : 0.55 }}
+                        className="w-full h-full object-cover"
+                        style={{ opacity: status === 'live' ? 1 : 0.55 }}
                         onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-                      <div className="absolute top-2.5 left-2.5">
-                        <span className="text-[10px] font-extrabold px-2 py-1 rounded-full uppercase tracking-wide shadow"
-                          style={{ background: ss.bg, color: ss.color, backdropFilter: 'blur(8px)', border: `1px solid ${ss.color}30` }}>
-                          {ss.label}
-                        </span>
-                      </div>
-                      <a href={a.imageUrl} target="_blank" rel="noreferrer"
-                        className="absolute top-2.5 right-2.5 p-1.5 rounded-lg"
-                        style={{ background: 'rgba(0,0,0,0.45)', color: 'white' }}
-                        title="View full image">
-                        <ExternalLink size={13} />
-                      </a>
-                    </div>
-                  )}
-                  <div className="p-4 flex items-start gap-3 flex-wrap"
-                    style={{ background: status === 'live' && !a.imageUrl ? meta.bg : 'rgba(248,250,252,0.7)' }}>
-                    {!a.imageUrl && (
-                      <div className="p-2 rounded-xl flex-shrink-0"
-                        style={{ background: `${meta.color}15`, color: meta.color }}>
-                        <Icon size={15} />
+                    ) : (
+                      /* NEU library branding gradient for text-only announcements */
+                      <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center"
+                        style={{ background: 'linear-gradient(135deg,hsl(221,72%,18%) 0%,hsl(221,55%,32%) 100%)' }}>
+                        <Icon size={28} style={{ color: 'rgba(255,255,255,0.4)', marginBottom: 8 }} />
+                        <p className="text-white font-bold text-sm leading-snug line-clamp-3">{a.title}</p>
+                        {a.body && (
+                          <p className="text-white/60 text-xs font-medium mt-1 line-clamp-2">{a.body}</p>
+                        )}
                       </div>
                     )}
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="font-bold text-slate-900 text-sm">{a.title}</p>
-                        {!a.imageUrl && (
-                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-wide"
-                            style={{ background: ss.bg, color: ss.color }}>{ss.label}</span>
-                        )}
-                        {a.imageUrl && (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-1"
-                            style={{ background: 'rgba(100,116,139,0.1)', color: '#64748b' }}>
-                            <ImageIcon size={9} />
-                            {a.imagePath ? 'Uploaded' : 'Linked image'}
-                          </span>
-                        )}
-                      </div>
-                      {a.body && (
-                        <p className="text-xs text-slate-500 font-medium leading-relaxed line-clamp-2">{a.body}</p>
-                      )}
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-xs text-slate-400 font-medium">
-                          {format(parseISO(a.startAt), 'MMM d')} — {format(parseISO(a.endAt), 'MMM d, yyyy')}
-                        </p>
-                        {(a as any).branchId ? (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
-                            style={{ background: 'rgba(5,150,105,0.08)', color: '#059669' }}>
-                            {branchNameMap[(a as any).branchId] ?? (a as any).branchId}
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-semibold text-slate-300">All Branches</span>
-                        )}
-                      </div>
+
+                    {/* Status badge — with dark backplate for legibility */}
+                    <div className="absolute top-2.5 left-2.5">
+                      <span className="text-[10px] font-extrabold px-2 py-1 rounded-full uppercase tracking-wide"
+                        style={{
+                          background: status === 'live' ? 'rgba(5,150,105,0.85)' : 'rgba(15,23,42,0.75)',
+                          color: status === 'live' ? 'white' : ss.color,
+                          backdropFilter: 'blur(6px)',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                        }}>
+                        {ss.label}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                        <button onClick={() => setPreviewAnn(a)}
-                          title="Preview on kiosk"
-                          className="p-2 rounded-xl text-slate-400 hover:bg-slate-100 transition-all">
-                          <Eye size={14} />
-                        </button>
-                        <button onClick={() => handleToggle(a)}
-                          title={a.isActive ? 'Hide from kiosk' : 'Show on kiosk'}
-                          className="p-2 rounded-xl text-slate-400 hover:bg-slate-100 transition-all">
-                          {a.isActive ? <EyeOff size={14} /> : <Eye size={14} />}
-                        </button>
-                        <button onClick={() => handleDelete(a)}
-                          title="Delete"
-                          className="p-2 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all">
-                          <Trash2 size={14} />
-                        </button>
+
+                    {/* Edit pencil icon (replaces confusing external link) */}
+                    <button onClick={() => openEdit(a)}
+                      className="absolute top-2.5 right-2.5 flex items-center justify-center w-7 h-7 rounded-lg transition-all"
+                      style={{ background: 'rgba(0,0,0,0.5)', color: 'white' }}
+                      title="Edit announcement">
+                      <Pencil size={12} />
+                    </button>
+                  </div>
+
+                  {/* Card body */}
+                  <div className="p-4 space-y-2">
+                    {/* Title row */}
+                    <div className="flex items-start gap-2">
+                      <div className="p-1.5 rounded-lg flex-shrink-0 mt-0.5"
+                        style={{ background: `${meta.color}15`, color: meta.color }}>
+                        <Icon size={13} />
                       </div>
+                      <p className="font-bold text-slate-900 text-sm leading-snug flex-1">{a.title}</p>
+                    </div>
+
+                    {a.body && (
+                      <p className="text-xs text-slate-500 font-medium leading-relaxed line-clamp-2 pl-7">{a.body}</p>
+                    )}
+
+                    {/* Date + branch row — higher contrast text */}
+                    <div className="flex items-center gap-2 flex-wrap pl-7">
+                      <p className="text-xs font-semibold text-slate-600">
+                        {format(parseISO(a.startAt), 'MMM d')} — {format(parseISO(a.endAt), 'MMM d, yyyy')}
+                      </p>
+                      {isSpecificBranch ? (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md"
+                          style={{ background: 'rgba(217,119,6,0.12)', color: '#92400e' }}>
+                          📍 {branchNameMap[(a as any).branchId] ?? (a as any).branchId}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md"
+                          style={{ background: 'rgba(10,26,77,0.07)', color: navy }}>
+                          🌐 All Branches
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Action buttons — larger touch targets */}
+                    <div className="flex items-center gap-1 pt-1 border-t border-slate-100">
+                      <button onClick={() => setPreviewAnn(a)}
+                        title="Preview on kiosk"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:bg-slate-100 transition-all">
+                        <Eye size={13} /> Preview
+                      </button>
+                      <button onClick={() => handleToggle(a)}
+                        title={a.isActive ? 'Hide from kiosk' : 'Show on kiosk'}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
+                        style={a.isActive
+                          ? { color: '#64748b' }
+                          : { color: '#059669' }}>
+                        {a.isActive ? <><EyeOff size={13} /> Hide</> : <><Eye size={13} /> Show</>}
+                      </button>
+                      <div className="flex-1" />
+                      {/* Delete only turns red on hover */}
+                      <button onClick={() => setConfirmDelete(a)}
+                        title="Delete"
+                        className="p-2 rounded-xl text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -564,7 +674,7 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
         </div>
       </div>
 
-      {/* Preview modal */}
+      {/* ── Preview modal ── */}
       {previewAnn && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6"
           style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(8px)' }}
@@ -578,10 +688,20 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
             </div>
             <div className="mx-4 mb-6 rounded-2xl overflow-hidden"
               style={{ background: 'rgba(255,255,255,0.97)', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
-              {previewAnn.imageUrl && (
-                <img src={previewAnn.imageUrl} alt={previewAnn.title}
-                  className="w-full object-cover" style={{ maxHeight: 220 }}
-                  onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+              {previewAnn.imageUrl ? (
+                <div style={{ aspectRatio: '16/9', background: '#0f172a', overflow: 'hidden' }}>
+                  <img src={previewAnn.imageUrl} alt={previewAnn.title}
+                    className="w-full h-full object-contain"
+                    onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                </div>
+              ) : (
+                /* Text-only: library branding gradient background */
+                <div className="flex flex-col items-center justify-center p-6 text-center"
+                  style={{ aspectRatio: '16/9', background: 'linear-gradient(135deg,hsl(221,72%,18%),hsl(221,55%,32%))' }}>
+                  {(() => { const Icon = TYPE_META[previewAnn.type].icon; return <Icon size={32} style={{ color: 'rgba(255,255,255,0.4)', marginBottom: 10 }} />; })()}
+                  <p className="text-white font-bold text-base">{previewAnn.title}</p>
+                  {previewAnn.body && <p className="text-white/60 text-sm mt-1">{previewAnn.body}</p>}
+                </div>
               )}
               <div className="p-4 flex items-start gap-3"
                 style={{ background: TYPE_META[previewAnn.type].bg }}>
@@ -608,6 +728,45 @@ export function KioskAnnouncements({ isSuperAdmin }: Props) {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ── Delete confirmation modal ── */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          style={{ background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(8px)', animation: 'fadeIn 0.2s ease-out' }}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden"
+            style={{ animation: 'scaleIn 0.25s ease-out' }}>
+            <div className="px-7 py-6 text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto"
+                style={{ background: 'rgba(220,38,38,0.08)' }}>
+                <Trash2 size={26} className="text-red-500" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900" style={{ fontFamily: "'Playfair Display',serif" }}>
+                  Delete Announcement?
+                </h3>
+                <p className="text-slate-500 text-sm mt-2 leading-relaxed">
+                  <strong className="text-slate-700">"{confirmDelete.title}"</strong> will be permanently removed from the kiosk.
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button onClick={() => setConfirmDelete(null)}
+                  className="flex-1 h-11 rounded-2xl font-semibold text-sm text-slate-600 border border-slate-200 hover:bg-slate-50 transition-all active:scale-95">
+                  Cancel
+                </button>
+                <button onClick={executeDelete}
+                  className="flex-1 h-11 rounded-2xl font-bold text-sm text-white transition-all active:scale-95"
+                  style={{ background: 'linear-gradient(135deg,#dc2626,#b91c1c)' }}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+          <style>{`
+            @keyframes fadeIn  { from { opacity: 0 } to { opacity: 1 } }
+            @keyframes scaleIn { from { opacity: 0; transform: scale(0.92) } to { opacity: 1; transform: scale(1) } }
+          `}</style>
         </div>
       )}
     </>

@@ -23,15 +23,14 @@ interface Props { branchId?: string; }
 
 /**
  * Renders active announcements on the kiosk idle screen.
- * - Text-only announcements: compact banner with icon + text
- * - Image announcements: full-width poster card with image on top, text below
- * Multiple announcements rotate every 6 seconds.
+ * - Image announcements:    full-width 16:9 poster + text below
+ * - Text-only announcements: blurred/darkened NEU library building as permanent background
+ * Multiple announcements rotate every 5 seconds.
  */
 export function KioskAnnouncementBanner({ branchId }: Props) {
   const db = useFirestore();
   const { user: authUser } = useUser();
 
-  // Only subscribe when user is authenticated (avoids permission errors during auth transitions)
   const annRef = useMemoFirebase(
     () => authUser ? collection(db, 'announcements') : null,
     [db, authUser]
@@ -68,6 +67,28 @@ export function KioskAnnouncementBanner({ branchId }: Props) {
   const meta = COLOR_MAP[ann.type];
   const Icon = ICON_MAP[ann.type];
 
+  // Navigation controls (shared)
+  const navControls = active.length > 1 && (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+      <button onClick={goPrev}
+        style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
+        <ChevronLeft size={14} />
+      </button>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        {active.map((_, i) => (
+          <div key={i} onClick={() => setIdx(i)}
+            style={{ width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
+              background: meta.icon, opacity: i === idx ? 1 : 0.3,
+              transition: 'all 0.3s ease', cursor: 'pointer' }} />
+        ))}
+      </div>
+      <button onClick={goNext}
+        style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
+        <ChevronRight size={14} />
+      </button>
+    </div>
+  );
+
   // ── Image poster layout ──────────────────────────────────────────────────
   if (ann.imageUrl) {
     return (
@@ -80,13 +101,15 @@ export function KioskAnnouncementBanner({ branchId }: Props) {
         transition: 'all 0.4s ease',
         fontFamily: "'DM Sans',sans-serif",
       }}>
-        {/* Poster image */}
-        <img
-          src={ann.imageUrl}
-          alt={ann.title}
-          style={{ width: '100%', display: 'block', maxHeight: 220, objectFit: 'cover' }}
-          onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
-        />
+        {/* Fixed 16:9 poster image */}
+        <div style={{ aspectRatio: '16/9', background: '#0f172a', overflow: 'hidden' }}>
+          <img
+            src={ann.imageUrl}
+            alt={ann.title}
+            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          />
+        </div>
         {/* Text below image */}
         <div style={{
           padding: '12px 16px',
@@ -106,75 +129,87 @@ export function KioskAnnouncementBanner({ branchId }: Props) {
               </p>
             )}
           </div>
-          {/* Navigation dots + prev/next */}
-          {active.length > 1 && (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-              <button onClick={goPrev}
-                style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
-                <ChevronLeft size={14} />
-              </button>
-              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                {active.map((_, i) => (
-                  <div key={i} onClick={() => setIdx(i)}
-                    style={{ width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
-                      background: meta.icon, opacity: i === idx ? 1 : 0.3,
-                      transition: 'all 0.3s ease', cursor: 'pointer' }} />
-                ))}
-              </div>
-              <button onClick={goNext}
-                style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
-                <ChevronRight size={14} />
-              </button>
-            </div>
-          )}
+          {navControls}
         </div>
       </div>
     );
   }
 
-  // ── Text-only layout ─────────────────────────────────────────────────────
+  // ── Text-only layout — blurred NEU library building background ───────────
   return (
     <div style={{
       margin: '0 0 20px 0',
-      padding: '12px 16px',
-      borderRadius: 14,
-      background: meta.bg,
+      borderRadius: 16,
+      overflow: 'hidden',
       border: `1px solid ${meta.border}`,
-      display: 'flex',
-      alignItems: 'flex-start',
-      gap: 12,
+      boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
       transition: 'all 0.4s ease',
       fontFamily: "'DM Sans',sans-serif",
+      position: 'relative',
     }}>
-      <Icon size={18} style={{ color: meta.icon, flexShrink: 0, marginTop: 1 }} />
-      <div style={{ flex: 1 }}>
-        <p style={{ fontWeight: 700, fontSize: '0.92rem', color: meta.text, marginBottom: ann.body ? 3 : 0 }}>
-          {ann.title}
-        </p>
-        {ann.body && (
-          <p style={{ fontSize: '0.82rem', color: meta.text, opacity: 0.8, fontWeight: 500, lineHeight: 1.5 }}>
-            {ann.body}
+      {/* Blurred, darkened NEU library building as background */}
+      <div style={{
+        position: 'relative',
+        aspectRatio: '16/9',
+        overflow: 'hidden',
+        background: 'hsl(221,72%,12%)',
+      }}>
+        {/* Library background image — blurred + darkened */}
+        <img
+          src="/neulibrary.jpg"
+          alt=""
+          style={{
+            position: 'absolute', inset: 0,
+            width: '100%', height: '100%',
+            objectFit: 'cover',
+            filter: 'blur(6px) brightness(0.35)',
+            transform: 'scale(1.05)', // prevent blur edges
+          }}
+        />
+        {/* Text overlay */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          padding: '16px 24px',
+          textAlign: 'center',
+          gap: 10,
+        }}>
+          <Icon size={28} style={{ color: 'rgba(255,255,255,0.55)' }} />
+          <p style={{
+            fontWeight: 800,
+            fontSize: '1.05rem',
+            color: 'white',
+            lineHeight: 1.3,
+            textShadow: '0 1px 6px rgba(0,0,0,0.6)',
+          }}>
+            {ann.title}
           </p>
-        )}
+          {ann.body && (
+            <p style={{
+              fontSize: '0.82rem',
+              color: 'rgba(255,255,255,0.8)',
+              fontWeight: 500,
+              lineHeight: 1.5,
+              textShadow: '0 1px 4px rgba(0,0,0,0.5)',
+            }}>
+              {ann.body}
+            </p>
+          )}
+        </div>
       </div>
+
+      {/* Bottom bar for nav controls */}
       {active.length > 1 && (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          <button onClick={goPrev}
-            style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
-            <ChevronLeft size={14} />
-          </button>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            {active.map((_, i) => (
-              <div key={i} onClick={() => setIdx(i)}
-                style={{ width: i === idx ? 14 : 6, height: 6, borderRadius: 3,
-                  background: meta.icon, opacity: i === idx ? 1 : 0.3,
-                  transition: 'all 0.3s ease', cursor: 'pointer' }} />
-            ))}
-          </div>
-          <button onClick={goNext}
-            style={{ background: `${meta.icon}20`, border: 'none', borderRadius: 8, padding: '4px 6px', cursor: 'pointer', color: meta.icon, display: 'flex', alignItems: 'center' }}>
-            <ChevronRight size={14} />
-          </button>
+        <div style={{
+          padding: '8px 14px',
+          background: meta.bg,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          borderTop: `1px solid ${meta.border}`,
+        }}>
+          {navControls}
         </div>
       )}
     </div>

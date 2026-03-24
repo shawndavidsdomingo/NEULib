@@ -804,9 +804,11 @@ export function ReportModule({ isSuperAdmin, branchId }: ReportModuleProps) {
         const activeCount = logs.filter(l => !l.checkOutTimestamp && isToday(parseISO(l.checkInTimestamp))).length;
         const noTapCount  = logs.filter(l => !l.checkOutTimestamp && !isToday(parseISO(l.checkInTimestamp))).length;
         const filterCtx  = [
+          `Branch: ${activeBranchName}`,
           deptFilter !== 'All Departments' ? `Dept: ${deptNameMap[deptFilter] || deptFilter}` : null,
           programFilter !== 'All Programs' ? `Program: ${programFilter}` : null,
           purposeFilter !== 'All Purposes' ? `Purpose: ${purposeFilter}` : null,
+          roleFilter !== 'all' ? `Role: ${roleFilter === 'staff' ? 'Staff/Faculty' : 'Student'}` : null,
         ].filter(Boolean).join(' · ') || 'All Active Sessions';
 
         drawHeader(GOLD, 'LIBRARY ACTIVITY & ENGAGEMENT REPORT', 'New Era University - Library Management System', filterCtx);
@@ -868,33 +870,85 @@ export function ReportModule({ isSuperAdmin, branchId }: ReportModuleProps) {
         pdf.setFontSize(10); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(255, 255, 255);
         pdf.text('3.  Session Archive - Active Visitor Log', W / 2, 8, { align: 'center' });
 
+        const isAllBranchesA = !branchId;
+        const hideDeptColA   = deptFilter !== 'All Departments';
+        const hideProgColA   = programFilter !== 'All Programs';
+
+        // Build dynamic column headers and body
+        const pdfColsA = [
+          'Student',
+          'ID',
+          ...(!hideDeptColA ? ['Dept'] : []),
+          ...(!hideProgColA ? ['Program'] : []),
+          'Purpose',
+          'Time In',
+          'Time Out',
+          'Duration',
+          'Status',
+          ...(isAllBranchesA ? ['Branch'] : []),
+        ];
+
+        const pdfBodyA = logs.map(l => {
+          const ci = safeParseISO(l.checkInTimestamp) ?? new Date();
+          const isAct = !l.checkOutTimestamp && isToday(ci);
+          const status = l.checkOutTimestamp ? 'Done' : isAct ? 'Active' : 'No Tap';
+          const dur = l.checkOutTimestamp ? (() => { const m = differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), ci); return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; })() : '-';
+          const branchLbl = isAllBranchesA ? (branchNames2[(l as any).branchId] ?? (l as any).branchId ?? '—') : undefined;
+          return [
+            l.studentName||'-',
+            l.studentId||'-',
+            ...(!hideDeptColA ? [l.deptID||'-'] : []),
+            ...(!hideProgColA ? [(l as LogRecord).program || userProgramMap[l.studentId] || '-'] : []),
+            l.purpose||'-',
+            format(ci,'MMM d, h:mm a'),
+            l.checkOutTimestamp ? (safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—') : '-',
+            dur,
+            status,
+            ...(isAllBranchesA ? [branchLbl||'—'] : []),
+          ];
+        });
+
+        // Dynamic column widths that sum to 182mm
+        const baseStudentW = 34;
+        const baseIdW = 24;
+        const deptW = 12;
+        const progW = 18;
+        const purposeW = 22;
+        const timeInW = 26;
+        const timeOutW = 18;
+        const durW = 10;
+        const statusW = 16;
+        const branchW = 20;
+        // Calculate remaining space and redistribute
+        const usedW = baseStudentW + baseIdW +
+          (!hideDeptColA ? deptW : 0) +
+          (!hideProgColA ? progW : 0) +
+          purposeW + timeInW + timeOutW + durW + statusW +
+          (isAllBranchesA ? branchW : 0);
+        const extraPerCol = Math.max(0, Math.floor((182 - usedW) / (pdfColsA.length)));
+
+        let colIdx = 0;
+        const colStylesA: Record<number, any> = {};
+        colStylesA[colIdx++] = { cellWidth: baseStudentW + extraPerCol, fontStyle: 'bold' };
+        colStylesA[colIdx++] = { cellWidth: baseIdW, font: 'courier', fontSize: 8.5 };
+        if (!hideDeptColA) colStylesA[colIdx++] = { cellWidth: deptW, halign: 'center', fontStyle: 'bold' };
+        if (!hideProgColA) colStylesA[colIdx++] = { cellWidth: progW, fontSize: 8.5 };
+        colStylesA[colIdx++] = { cellWidth: purposeW };
+        colStylesA[colIdx++] = { cellWidth: timeInW };
+        colStylesA[colIdx++] = { cellWidth: timeOutW };
+        colStylesA[colIdx++] = { cellWidth: durW, halign: 'center' };
+        colStylesA[colIdx++] = { cellWidth: statusW, halign: 'center', fontStyle: 'bold' };
+        if (isAllBranchesA) colStylesA[colIdx++] = { cellWidth: branchW, fontSize: 8 };
+
         autoTable(pdf, {
           startY: 16,
-          head: [['Student', 'ID', 'Dept', 'Program', 'Purpose', 'Time In', 'Time Out', 'Duration', 'Status']],
-          body: logs.map(l => {
-            const ci = safeParseISO(l.checkInTimestamp) ?? new Date();
-            const isAct = !l.checkOutTimestamp && isToday(ci);
-            const isNT  = !l.checkOutTimestamp && !isToday(ci);
-            const status = l.checkOutTimestamp ? 'Done' : isAct ? 'Active' : 'No Tap';
-            const dur = l.checkOutTimestamp ? (() => { const m = differenceInMinutes(safeParseISO(l.checkOutTimestamp) ?? new Date(), ci); return m < 60 ? `${m}m` : `${Math.floor(m/60)}h ${m%60}m`; })() : '-';
-            return [l.studentName||'-', l.studentId||'-', l.deptID||'-', (l as LogRecord).program || userProgramMap[l.studentId] || '-', l.purpose||'-', format(ci,'MMM d, h:mm a'), l.checkOutTimestamp ? (safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—') : '-', dur, status];
-          }),
+          head: [pdfColsA],
+          body: pdfBodyA,
           headStyles:         { fillColor: NAVY, textColor: 255, fontStyle: 'bold', fontSize: 9.5 },
           bodyStyles:         { fontSize: 9 },
           alternateRowStyles: { fillColor: LIGHT },
           showHead: 'everyPage',
-          // A4 usable width = 210 - 14 - 14 = 182mm. Columns sum = 182.
-          columnStyles: {
-            0: { cellWidth: 36, fontStyle: 'bold' },            // Student
-            1: { cellWidth: 24, font: 'courier', fontSize: 8.5 }, // ID
-            2: { cellWidth: 12, halign: 'center', fontStyle: 'bold' }, // Dept
-            3: { cellWidth: 18, fontSize: 8.5 },                 // Program
-            4: { cellWidth: 22 },                                // Purpose
-            5: { cellWidth: 26 },                                // Time In
-            6: { cellWidth: 18 },                                // Time Out
-            7: { cellWidth: 10, halign: 'center' },              // Dur
-            8: { cellWidth: 16, halign: 'center', fontStyle: 'bold' }, // Status
-          },
+          columnStyles: colStylesA,
           styles: { cellPadding: { top: 3, bottom: 3, left: 2.5, right: 2.5 }, overflow: 'linebreak' },
           tableWidth: 182,
           margin: { left: 5, right: 5 },
@@ -902,10 +956,10 @@ export function ReportModule({ isSuperAdmin, branchId }: ReportModuleProps) {
             if (data.section !== 'body') return;
             const row = logs[data.row.index]; if (!row) return;
             const ci  = parseISO(row.checkInTimestamp);
-            const isAct = !row.checkOutTimestamp && isToday(ci);
-            const isNT  = !row.checkOutTimestamp && !isToday(ci);
-            if (isAct) { data.cell.styles.fillColor = BLU_BG; if (data.column.index === 8) data.cell.styles.textColor = BLU_TXT; }
-            else if (isNT) { data.cell.styles.fillColor = AMB_BG; if (data.column.index === 8) data.cell.styles.textColor = AMB_TXT; }
+            const isAct2 = !row.checkOutTimestamp && isToday(ci);
+            const isNT2  = !row.checkOutTimestamp && !isToday(ci);
+            if (isAct2) { data.cell.styles.fillColor = BLU_BG; if (data.column.index === pdfColsA.length - (isAllBranchesA ? 2 : 1)) data.cell.styles.textColor = BLU_TXT; }
+            else if (isNT2) { data.cell.styles.fillColor = AMB_BG; if (data.column.index === pdfColsA.length - (isAllBranchesA ? 2 : 1)) data.cell.styles.textColor = AMB_TXT; }
           },
         });
         addPageNumbers('Library Activity & Engagement Report');
@@ -1536,34 +1590,46 @@ export function ReportModule({ isSuperAdmin, branchId }: ReportModuleProps) {
                   </span>
                 )}
               </p>
-              {isFiltersDirty && (
-                <button onClick={handleResetFilters}
-                  className="flex items-center gap-1.5 h-8 px-3 rounded-xl text-xs font-bold border transition-all active:scale-95"
-                  style={{ background: 'rgba(220,38,38,0.06)', color: '#dc2626', borderColor: 'rgba(220,38,38,0.2)' }}>
-                  <RotateCcw size={11} /> Reset Filters &amp; Sort
-                </button>
-              )}
+              <div className="flex items-center gap-2">
+                {/* Branch chip — always visible so admin knows which branch data they see */}
+                <span className="flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-lg"
+                  style={{ background: `${navy}0d`, color: navy }}>
+                  🌿 {activeBranchName}
+                </span>
+                {isFiltersDirty && (
+                  <button onClick={handleResetFilters}
+                    className="flex items-center gap-1.5 h-8 px-3 rounded-xl text-xs font-bold border transition-all active:scale-95"
+                    style={{ background: 'rgba(220,38,38,0.06)', color: '#dc2626', borderColor: 'rgba(220,38,38,0.2)' }}>
+                    <RotateCcw size={11} /> Reset Filters &amp; Sort
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Action buttons */}
             <div className="flex flex-col sm:flex-row gap-3">
-              {/* Split PDF button: View (inline) + Download */}
+              {/* Preview + Download PDF — outlined (secondary actions) */}
               <div className="flex flex-1 rounded-xl overflow-hidden border border-slate-200 divide-x divide-slate-200">
                 <button onClick={() => generatePDF('view')} disabled={filteredLogs.length === 0}
-                  className="flex-1 h-12 font-semibold text-sm flex items-center justify-center gap-2 bg-white text-slate-700 hover:bg-slate-50 active:scale-95 transition-all disabled:opacity-40">
+                  className="flex-1 h-12 font-semibold text-sm flex items-center justify-center gap-2 bg-white hover:bg-slate-50 active:scale-95 transition-all disabled:opacity-40"
+                  style={{ color: navy }}>
                   <Eye size={15} /> Preview
                 </button>
                 <button onClick={() => generatePDF('download')} disabled={filteredLogs.length === 0}
-                  className="flex-1 h-12 font-semibold text-sm flex items-center justify-center gap-2 bg-white text-slate-700 hover:bg-slate-50 active:scale-95 transition-all disabled:opacity-40">
+                  className="flex-1 h-12 font-semibold text-sm flex items-center justify-center gap-2 bg-white hover:bg-slate-50 active:scale-95 transition-all disabled:opacity-40"
+                  style={{ color: navy }}>
                   <FileDown size={15} /> Download PDF
                 </button>
               </div>
+              {/* Export CSV — primary (filled emerald) */}
               <button onClick={exportCSV} disabled={filteredLogs.length === 0}
-                className="flex-1 h-12 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50 active:scale-95 transition-all disabled:opacity-40">
+                className="flex-1 h-12 rounded-xl font-bold text-sm flex items-center justify-center gap-2 text-white active:scale-95 transition-all disabled:opacity-40"
+                style={{ background: 'linear-gradient(135deg,#059669,#047857)' }}>
                 <Sheet size={17} /> Export CSV
               </button>
+              {/* AI Insights — primary (filled navy) */}
               <button onClick={generateAiSummary} disabled={isGeneratingAi || filteredLogs.length === 0}
-                className="flex-1 h-12 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-40"
+                className="flex-1 h-12 rounded-xl font-bold text-sm flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-40"
                 style={navyBtn}>
                 {isGeneratingAi ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
                 {isGeneratingAi ? 'Analyzing...' : 'AI Insights'}
@@ -1917,10 +1983,15 @@ export function ReportModule({ isSuperAdmin, branchId }: ReportModuleProps) {
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">
-                        <span className="text-sm font-medium"
-                          style={{ color: l.checkOutTimestamp ? '#475569' : noTap ? '#ef4444' : '#3b82f6' }}>
-                          {l.checkOutTimestamp ? (safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—') : noTap ? 'NO TAP' : 'ACTIVE'}
-                        </span>
+                        {l.checkOutTimestamp ? (
+                          <span className="text-sm font-medium" style={{ color: '#475569' }}>
+                            {safeParseISO(l.checkOutTimestamp) ? format(safeParseISO(l.checkOutTimestamp)!, 'h:mm a') : '—'}
+                          </span>
+                        ) : noTap ? (
+                          <span className="text-xs text-slate-300 italic">—</span>
+                        ) : (
+                          <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600">Inside</span>
+                        )}
                       </TableCell>
                       <TableCell className="hidden md:table-cell text-center">
                         <span className="text-sm font-bold font-mono"

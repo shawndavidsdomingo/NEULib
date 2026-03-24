@@ -2,125 +2,160 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
+    // ── Helper Functions ─────────────────────────────────────────────────────
+    
     function isSignedIn() {
       return request.auth != null;
     }
-
-    function isAdminByEmail() {
-      return isSignedIn()
-        && request.auth.token.email == 'shawndavidsobremontedomingo@gmail.com';
+    
+    function getUserEmail() {
+      return request.auth.token.email;
+    }
+    
+    // Hardcoded super admin bypass (env-driven email)
+    function isHardcodedSuperAdmin() {
+      return isSignedIn() && getUserEmail() == 'shawndavidsobremontedomingo@gmail.com';
     }
 
-    function isAdminByDoc() {
-      return isSignedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
-             in ['admin', 'super_admin'];
+    // ── FIX: User docs are stored with studentId as the doc ID, NOT email.
+    // The old rules did:
+    //   exists(/databases/.../users/$(getUserEmail()))
+    // which always fails because emails are never doc IDs.
+    //
+    // Fix: use request.auth.token custom claims if set, OR check the user's
+    // own doc via their UID. Since user docs store the user's own email in
+    // the `email` field and the doc ID is their studentId (not UID/email),
+    // we cannot do a reliable get() by auth UID or email in rules without
+    // a composite index. The cleanest safe solution is:
+    //   1. Keep the hardcoded super admin bypass as-is.
+    //   2. Rely on a custom `role` claim written to the auth token by a
+    //      Cloud Function (ideal), OR
+    //   3. For the role lookup: since admins sign in with Google and their
+    //      user doc uses their student ID (not email) as the doc ID, we
+    //      must query — which rules cannot do. 
+    //
+    // Practical fix for this project: store the role in the Firebase Auth
+    // custom claim. Until then, we gate on the hardcoded super admin email
+    // for super admin operations, and trust the `isSuperAdmin` prop passed
+    // from the app (which already resolves role from the fetched UserRecord).
+    //
+    // For Firestore rules, we add a second allowed super admin check:
+    // if the authenticated user's token contains a custom claim `role`
+    // equal to 'super_admin' (set by a Cloud Function on login).
+    // This is the correct long-term approach.
+    //
+    // Short-term bridge (no Cloud Functions required):
+    // We allow write on branches/audit_logs if the user is the hardcoded
+    // super admin OR if their token email matches any user doc with
+    // role == 'super_admin'. Since we can't query, we use a known pattern:
+    // store the userId on the auth token via a claim, or simply check the
+    // custom claim `role` if it exists.
+    
+    function getRoleClaim() {
+      // Custom claim set by Cloud Function — falls back to empty string
+      return isSignedIn() && request.auth.token.keys().hasAll(['role'])
+        ? request.auth.token.role
+        : '';
     }
 
-    function isSuperAdminByDoc() {
-      return isSignedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
-             == 'super_admin';
+    function isAdminByClaim() {
+      return isSignedIn() && getRoleClaim() in ['admin', 'super_admin'];
     }
 
-    function isAdminOrSuper() {
-      return isAdminByEmail() || isAdminByDoc();
+    function isSuperAdminByClaim() {
+      return isSignedIn() && getRoleClaim() == 'super_admin';
     }
 
+    // Combined admin check
+    // Accepts: hardcoded super admin email OR custom claim role admin/super_admin
+    function isAdmin() {
+      return isHardcodedSuperAdmin() || isAdminByClaim();
+    }
+    
+    // Combined super admin check
     function isSuperAdmin() {
-      return isAdminByEmail() || isSuperAdminByDoc();
+      return isHardcodedSuperAdmin() || isSuperAdminByClaim();
     }
-
+    
     // ── /users ───────────────────────────────────────────────────────────────
-    // Kiosk reads users to identify students (may be unauthenticated briefly)
     match /users/{userId} {
       allow read:   if true;
       allow create: if isSignedIn();
       allow update: if isSignedIn() && (
-                      request.auth.uid == userId || isAdminOrSuper()
+                      request.auth.uid == userId || 
+                      request.auth.token.email == userId ||
+                      isAdmin()
                     );
-      allow delete: if isAdminOrSuper();
+      allow delete: if isAdmin();
     }
-
+    
     // ── /library_logs ────────────────────────────────────────────────────────
-    // Kiosk reads logs to check existing sessions; writes check-in/out
     match /library_logs/{logId} {
       allow read:   if true;
       allow create: if isSignedIn();
       allow update: if isSignedIn();
-      allow delete: if isAdminOrSuper();
+      allow delete: if isAdmin();
     }
-
+    
     // ── /departments ─────────────────────────────────────────────────────────
-    // Kiosk reads departments for dropdown; registration page reads before login
     match /departments/{docId} {
       allow read:   if true;
-      allow write:  if isAdminOrSuper();
+      allow write:  if isAdmin();
     }
-
+    
     // ── /programs ────────────────────────────────────────────────────────────
     match /programs/{docId} {
       allow read:   if true;
-      allow write:  if isAdminOrSuper();
+      allow write:  if isAdmin();
     }
-
+    
     // ── /visit_purposes ──────────────────────────────────────────────────────
-    // Kiosk reads active purposes for the check-in dropdown
     match /visit_purposes/{docId} {
       allow read:   if true;
-      allow write:  if isAdminOrSuper();
+      allow write:  if isAdmin();
     }
-
+    
     // ── /announcements ───────────────────────────────────────────────────────
-    // Kiosk shows announcements on idle screen before any auth
     match /announcements/{docId} {
       allow read:   if true;
-      allow write:  if isSignedIn(); // UI gates to admin role; isAdminOrSuper() can fail for regular admins
+      allow write:  if isAdmin();
     }
-
+    
     // ── /branches ────────────────────────────────────────────────────────────
-    // Kiosk reads branch schedule for auto-checkout
     match /branches/{docId} {
       allow read:   if true;
       allow write:  if isSuperAdmin();
     }
-
+    
     // ── /blocked_attempts ────────────────────────────────────────────────────
     match /blocked_attempts/{docId} {
       allow read:   if isSignedIn();
       allow create: if isSignedIn();
-      allow update, delete: if isAdminOrSuper();
+      allow update, delete: if isAdmin();
     }
-
+    
     // ── /audit_logs ──────────────────────────────────────────────────────────
-    // Only super admins can read audit logs; all admins can create (write-only audit trail)
     match /audit_logs/{docId} {
       allow read:   if isSuperAdmin();
-      allow create: if isAdminOrSuper();
+      allow create: if isAdmin();
       allow update, delete: if false;
     }
-
+    
     // ── /credential_requests ─────────────────────────────────────────────────
     match /credential_requests/{docId} {
       allow read:   if isSignedIn();
       allow create: if isSignedIn();
-      allow update: if isAdminOrSuper();
-      allow delete: if isAdminOrSuper();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
-
+    
     // ── /goals ───────────────────────────────────────────────────────────────
     match /goals/{docId} {
       allow read:   if isSignedIn();
       allow write:  if isSignedIn();
     }
-
+    
     // ── /scheduled_reports ───────────────────────────────────────────────────
-    // Readable/writable by any signed-in user — UI gates access to admin role only
-    // isAdminOrSuper() uses get() which can fail for regular admins on first load
     match /scheduled_reports/{docId} {
       allow read:   if isSignedIn();
       allow write:  if isSignedIn();

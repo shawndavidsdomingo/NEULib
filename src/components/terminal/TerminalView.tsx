@@ -197,52 +197,97 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
   }, [kioskBranchId, db]);
 
   // ── Auto-checkout open sessions at library closing time ──────────────────
-  // Runs every minute. If current time is past today's closing time,
+  // Runs every minute. When current time reaches today's closing time,
   // all open sessions for this branch are auto-closed and marked "NO TAP".
+  //
+  // BUG FIXED — "always times out at 2:41 AM":
+  // parseTimeToday(today.close) builds the close time using the CURRENT date.
+  // After midnight, the branch's closing time (e.g. 21:00) has already passed
+  // in the new day, so isBefore(now, closeTime) is false immediately on every
+  // mount → checkAndAutoClose() fires and closes all open sessions at any time
+  // past midnight, which is wrong.
+  //
+  // Fix: Only trigger auto-close within a narrow window ON THE SAME DAY as the
+  // closing time. We track a `autoClosedForDate` ref so the batch only fires
+  // once per calendar day, and we add an explicit guard that the current time
+  // is within [closeTime, closeTime + 2 hours] — not just "past close time".
+  // Sessions opened on a previous day that were never tapped out are left alone;
+  // they will appear as open in the admin dashboard and can be handled manually
+  // (or by a server-side Cloud Function, which is the correct long-term solution).
   useEffect(() => {
     if (!branchSchedule) return;
 
+    // Track which calendar date we've already auto-closed for, to prevent
+    // firing again after midnight when the close time is "already past".
+    const autoClosedForDate = { value: '' };
+
     const checkAndAutoClose = async () => {
+      const now = new Date();
       const key = todayKey();
       const today = branchSchedule[key];
       if (!today || today.closed) return;
 
       const closeTime = parseTimeToday(today.close);
-      const now = new Date();
-      if (isBefore(now, closeTime)) return; // not closing time yet
+
+      // ── Guard 1: Only fire if we're past closing time ────────────────────
+      if (isBefore(now, closeTime)) return;
+
+      // ── Guard 2: Only fire within 2 hours after closing time (same day).
+      // This prevents triggering at 2:41 AM when "21:00 has already passed"
+      // in the new calendar day.
+      const twoHoursAfterClose = new Date(closeTime.getTime() + 2 * 60 * 60 * 1000);
+      if (isAfter(now, twoHoursAfterClose)) return;
+
+      // ── Guard 3: Only fire once per calendar day ─────────────────────────
+      const todayDateStr = now.toISOString().slice(0, 10); // "YYYY-MM-DD"
+      if (autoClosedForDate.value === todayDateStr) return;
+      autoClosedForDate.value = todayDateStr;
 
       try {
-        const q = query(
-          collection(db, 'library_logs'),
-          where('checkOutTimestamp', '==', null),
-          ...(kioskBranchId ? [where('branchId', '==', kioskBranchId)] : [])
-        );
+        // Query by today's date range — avoids composite index requirement.
+        const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+        const todayEnd   = new Date(now); todayEnd.setHours(23, 59, 59, 999);
+
+        const constraints: Parameters<typeof query>[1][] = [
+          where('checkInTimestamp', '>=', todayStart.toISOString()),
+          where('checkInTimestamp', '<=', todayEnd.toISOString()),
+        ];
+        if (kioskBranchId) {
+          constraints.push(where('branchId', '==', kioskBranchId));
+        }
+
+        const q    = query(collection(db, 'library_logs'), ...constraints);
         const snap = await getDocs(q);
         if (snap.empty) return;
 
-        // Only close sessions from today
-        const toClose = snap.docs.filter(d => {
-          const checkIn = d.data().checkInTimestamp;
-          return checkIn && isToday(parseISO(checkIn));
-        });
+        // Filter client-side: only docs with no checkOutTimestamp (open sessions)
+        const toClose = snap.docs.filter(d => !d.data().checkOutTimestamp);
 
         if (!toClose.length) return;
 
-        const batch = writeBatch(db);
+        const batch   = writeBatch(db);
         const closeTs = closeTime.toISOString();
         toClose.forEach(d => {
           batch.update(d.ref, {
             checkOutTimestamp: closeTs,
-            autoCheckout: true,      // flag so reports can identify these
-            checkoutReason: 'library_closed',
+            noTap:             true,             // student did not tap out before closing
+            autoCheckout:      true,             // flag so reports can identify these
+            checkoutReason:    'library_closed',
           });
         });
         await batch.commit();
-      } catch { /* non-fatal */ }
+      } catch (err) {
+        // Reset so we retry on next tick if something failed
+        autoClosedForDate.value = '';
+        console.error('[AutoClose] Failed to auto-checkout open sessions:', err);
+      }
     };
 
-    checkAndAutoClose(); // run immediately on mount
-    const interval = setInterval(checkAndAutoClose, 60_000); // then every minute
+    // Do NOT run immediately on mount — wait for the first minute tick.
+    // Running on mount is what caused the "2:41 AM" bug: the kiosk page
+    // loads after midnight, close time is already in the past, and the
+    // guard was not tight enough. Now we only check on interval.
+    const interval = setInterval(checkAndAutoClose, 60_000);
     return () => clearInterval(interval);
   }, [branchSchedule, db, kioskBranchId]);
 
@@ -670,12 +715,15 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
     setDocumentNonBlocking(
       doc(db, 'library_logs', logDocId),
       {
-        studentId:        identifiedStudent.studentId,
-        deptID:           identifiedStudent.deptID,
-        program:          (identifiedStudent as any).program ?? '',
-        checkInTimestamp: new Date().toISOString(),
+        studentId:          identifiedStudent.studentId,
+        deptID:             identifiedStudent.deptID,
+        program:            (identifiedStudent as any).program ?? '',
+        checkInTimestamp:   new Date().toISOString(),
+        checkOutTimestamp:  null,   // explicit null — auto-close query filters with !data.checkOutTimestamp
         purpose,
         studentName,
+        noTap:              false,  // reset: not a no-tap yet
+        autoCheckout:       false,
         ...(avatarUrl       ? { avatarUrl }               : {}),
         ...(kioskBranchId   ? { branchId: kioskBranchId } : {}),
       },
@@ -1126,11 +1174,11 @@ export default function TerminalView({ onComplete, onAdminReturn, onRegister, pr
                 <div className="flex flex-col gap-2">
                   <button
                     onClick={() => {
-                      setBlockedStudent(null);
                       if (identifiedStudent) {
                         setContactAdminUser(identifiedStudent);
                         setShowContactAdmin(true);
                       }
+                      setBlockedStudent(null);
                     }}
                     className="w-full h-12 rounded-2xl font-bold text-sm text-white transition-all"
                     style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}>

@@ -145,10 +145,10 @@ export function BranchManagement() {
     if (!editName.trim()) return;
     await updateDoc(doc(db, 'branches', b.id), {
       name:     editName.trim(),
-      schedule: editSchedule,
+      schedule: editSchedule,   // ← always persist the schedule from editSchedule state
     });
     setEditId(null);
-    toast({ title: 'Branch updated' });
+    toast({ title: 'Branch updated', description: `${editName.trim()} and its schedule have been saved.` });
   };
 
   const handleSaveSchedule = async (b: BranchRecord, sched: WeekSchedule) => {

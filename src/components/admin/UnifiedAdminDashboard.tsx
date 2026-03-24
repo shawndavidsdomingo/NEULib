@@ -28,7 +28,7 @@ import { UserRecord } from '@/lib/firebase-schema';
 import { User } from 'firebase/auth';
 import { useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { useToast } from '@/hooks/use-toast';
-import { collection, query, where, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -109,9 +109,17 @@ interface UnifiedAdminDashboardProps {
 const navy     = 'hsl(221,72%,22%)';
 const navyGrad = 'linear-gradient(135deg,hsl(221,72%,18%),hsl(221,72%,24%))';
 
+const SUPER_ADMIN_EMAIL = (process.env.NEXT_PUBLIC_SUPER_ADMIN_EMAIL || 'shawndavidsobremontedomingo@gmail.com').toLowerCase();
+
 export default function UnifiedAdminDashboard({
-  onExit, adminData, user, isSuperAdmin, onSwitchToStudent, suppressBranchPicker,
+  onExit, adminData, user, isSuperAdmin: isSuperAdminProp, onSwitchToStudent, suppressBranchPicker,
 }: UnifiedAdminDashboardProps) {
+  // ── Resolve isSuperAdmin: prop OR role on adminData OR email match ────────
+  // This ensures the hardcoded super admin email always gets super admin access
+  // even when their Firestore doc has role='admin' or doesn't exist yet.
+  const isSuperAdmin = isSuperAdminProp
+    || adminData?.role === 'super_admin'
+    || (user?.email?.toLowerCase() === SUPER_ADMIN_EMAIL);
   const [activeTab,     setActiveTab]     = useState('overview');
   const [showKioskInfo, setShowKioskInfo] = useState(false);
   const [confirmSwitch, setConfirmSwitch] = useState(false);
@@ -141,13 +149,32 @@ export default function UnifiedAdminDashboard({
   const { data: pendingReqs } = useCollection<any>(credReqRef);
   const credReqCount = pendingReqs?.length || 0;
 
-  // Live presence badge — open sessions (library_logs is readable by all signed-in)
-  const openSessionsRef = useMemoFirebase(
-    () => query(collection(db, 'library_logs'), where('checkOutTimestamp', '==', null)),
-    [db]
-  );
-  const { data: openSessions } = useCollection<any>(openSessionsRef);
-  const liveCount = openSessions?.length ?? 0;
+  // Live presence badge — open sessions for today.
+  //
+  // FIX: The previous query used where('checkOutTimestamp', '==', null) which
+  // is unreliable (requires index, fails silently) and also never cleared after
+  // the auto-checkout batch runs. We now fetch today's logs once per minute and
+  // count those with no checkOutTimestamp client-side — same pattern as the
+  // TerminalView auto-close fix.
+  const [liveCount, setLiveCount] = useState(0);
+  useEffect(() => {
+    const fetchLiveCount = async () => {
+      try {
+        const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+        const todayEnd   = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const snap = await getDocs(query(
+          collection(db, 'library_logs'),
+          where('checkInTimestamp', '>=', todayStart.toISOString()),
+          where('checkInTimestamp', '<=', todayEnd.toISOString()),
+        ));
+        const open = snap.docs.filter(d => !d.data().checkOutTimestamp).length;
+        setLiveCount(open);
+      } catch { /* non-fatal */ }
+    };
+    fetchLiveCount();
+    const interval = setInterval(fetchLiveCount, 60_000);
+    return () => clearInterval(interval);
+  }, [db]);
 
   // Branches — readable by all signed-in users
   const branchesRef = useMemoFirebase(() => collection(db, 'branches'), [db]);
@@ -284,8 +311,8 @@ export default function UnifiedAdminDashboard({
       style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.2) transparent' }}>
       {navGroups.map(group => (
         <div key={group.title}>
-          <p className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-widest"
-            style={{ color: 'rgba(255,255,255,0.30)', letterSpacing: '0.12em' }}>
+          <p className="px-2 pb-1.5 pt-1 text-[11px] font-extrabold uppercase tracking-widest"
+            style={{ color: 'rgba(255,255,255,0.40)', letterSpacing: '0.10em', marginTop: 8 }}>
             {group.title}
           </p>
           <div className="space-y-0.5">
@@ -341,21 +368,9 @@ export default function UnifiedAdminDashboard({
     </nav>
   );
 
-  // ── Bottom actions ────────────────────────────────────────────────────────
+  // ── Bottom actions (sign out and switch to student only, branch switcher removed) ──
   const BottomActions = ({ onItemClick }: { onItemClick?: () => void }) => (
     <div className="p-4 border-t border-white/10 space-y-2">
-      {/* Switch branch */}
-      {branches && branches.length > 0 && (
-        <button onClick={() => { onItemClick?.(); setBranchSelected(false); }}
-          className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all text-left"
-          style={{ color: 'rgba(255,255,255,0.45)' }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.75)'; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.45)'; }}>
-          <GitBranch size={15} />
-          <span className="flex-1 truncate">{activeBranchId ? (branches.find(b => b.id === activeBranchId)?.name ?? 'Branch') : 'All Branches'}</span>
-          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md" style={{ background: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)' }}>Switch</span>
-        </button>
-      )}
       {onSwitchToStudent && (
         <button onClick={() => { onItemClick?.(); setConfirmSwitch(true); }}
           className="w-full flex items-center justify-center gap-1.5 h-9 px-3 rounded-xl text-sm font-bold transition-all active:scale-95"
@@ -395,16 +410,43 @@ export default function UnifiedAdminDashboard({
           </div>
         </div>
 
-        {/* User card */}
-        <div className="p-5 border-b border-white/10 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg,hsl(43,85%,55%),hsl(38,90%,48%))', color: 'hsl(221,72%,12%)' }}>
-            {initials}
+        {/* User card + branch switcher */}
+        <div className="p-5 border-b border-white/10 space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg,hsl(43,85%,55%),hsl(38,90%,48%))', color: 'hsl(221,72%,12%)' }}>
+              {initials}
+            </div>
+            <div className="min-w-0">
+              <p className="text-white font-bold text-base leading-tight truncate">{displayName}</p>
+              <p className="text-white/45 font-medium truncate" style={{ fontSize: '0.82rem' }}>{dept}</p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <p className="text-white font-bold text-base leading-tight truncate">{displayName}</p>
-            <p className="text-white/45 font-medium truncate" style={{ fontSize: '0.82rem' }}>{dept}</p>
-          </div>
+
+          {/* Branch switcher — global context selector, lives near top */}
+          {branches && branches.length > 0 && (
+            <div className="flex items-center gap-2 px-1">
+              <GitBranch size={12} style={{ color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
+              <Select
+                value={activeBranchId ?? 'all'}
+                onValueChange={v => { setActiveBranchId(v === 'all' ? null : v); setBranchSelected(true); }}>
+                <SelectTrigger className="flex-1 h-7 text-xs font-bold rounded-lg border-0"
+                  style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.75)' }}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl">
+                  {branches.length > 1 && (
+                    <SelectItem value="all" className="text-xs font-semibold">All Branches</SelectItem>
+                  )}
+                  {branches.map(b => (
+                    <SelectItem key={b.id} value={b.id} className="text-xs font-semibold">
+                      {b.name}{b.isDefault ? ' ★' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
 
         {renderNav()}
@@ -493,6 +535,34 @@ export default function UnifiedAdminDashboard({
                   <XIcon size={18} />
                 </button>
               </div>
+
+              {/* Mobile drawer branch switcher */}
+              {branches && branches.length > 0 && (
+                <div className="px-5 py-3 border-b border-white/10">
+                  <div className="flex items-center gap-2">
+                    <GitBranch size={12} style={{ color: 'rgba(255,255,255,0.4)', flexShrink: 0 }} />
+                    <Select
+                      value={activeBranchId ?? 'all'}
+                      onValueChange={v => { setActiveBranchId(v === 'all' ? null : v); setBranchSelected(true); setMenuOpen(false); }}>
+                      <SelectTrigger className="flex-1 h-7 text-xs font-bold rounded-lg border-0"
+                        style={{ background: 'rgba(255,255,255,0.10)', color: 'rgba(255,255,255,0.75)' }}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl">
+                        {branches.length > 1 && (
+                          <SelectItem value="all" className="text-xs font-semibold">All Branches</SelectItem>
+                        )}
+                        {branches.map(b => (
+                          <SelectItem key={b.id} value={b.id} className="text-xs font-semibold">
+                            {b.name}{b.isDefault ? ' ★' : ''}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
               {renderNav(() => setMenuOpen(false))}
               <BottomActions onItemClick={() => setMenuOpen(false)} />
             </div>
